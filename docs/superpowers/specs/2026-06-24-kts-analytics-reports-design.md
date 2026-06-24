@@ -139,19 +139,27 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 
 ### Layout (`layout.tsx`)
 - Fixed left sidebar (200px, dark bg)
-- Sidebar contains 2 nav items: "Average Sales Report" & "Stock Aging Report"
+- Sidebar sections:
+  - Top: 2 nav items — "Average Sales Report" & "Stock Aging Report"
+  - Bottom: "Recent Reports" section (last 3 uploads, clickable to reload)
 - Main content area (flex-grow, right side)
 - Active nav item highlighted
 
 ### Average Sales Report Page (`average-sales/page.tsx`)
 **Components:**
-- `FileUpload` — drag-drop or click to select SALES CSV
+- `FileUpload` — drag-drop or click to select SALES CSV (hint: "Drop SALES.csv here")
+  - Option: "Use sample CSV" button for instant demo
+- `ProcessingStatus` — badge after upload ("✓ 250 items processed in 2.3s | Errors: 0")
+- `SummaryCard` — metrics snapshot (grid of 4 cards):
+  - Total Items | Total Revenue | Avg Qty/Txn | Avg Revenue/Txn
 - `ProcessingSpinner` — show while API processes
 - `ReportTable` — display results:
   - Columns: Item Code | Item Name | Total Qty | Avg Qty/Txn | Total Revenue | Avg Revenue/Txn
+  - Subtotals row at bottom (sum of quantities, sum of revenue)
   - Sortable by any column
   - Pagination (50 items/page)
-- `ExportButtons` — CSV & PDF download
+  - Row header: "Showing X-Y of Z items"
+- `ExportButtons` — CSV & PDF download + "Export all sections as PDF"
 
 **State:**
 - `file`: selected file
@@ -171,13 +179,19 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 
 ### Stock Aging Report Page (`stock-aging/page.tsx`)
 **Components:**
-- `FileUpload` — drag-drop or click to select CLOSING CSV
+- `FileUpload` — drag-drop or click to select CLOSING CSV (hint: "Drop CLOSING.csv here")
+  - Option: "Use sample CSV" button for instant demo
+- `ProcessingStatus` — badge after upload ("✓ 150 items processed in 1.8s | Errors: 0")
+- `SummaryCard` — critical metrics (grid of 4 cards):
+  - Total Stock Value (sum) | URGENT Items (count, red bg) | SOON Items (count, yellow bg) | SAFE Items (count, green bg)
 - `ProcessingSpinner` — show while API processes
 - `ReportTable` — display results:
   - Columns: Item Code | Item Name | Total Stock | Days From Mfg | Days To Expire | Status (badge: URGENT=red, SOON=yellow, SAFE=green)
   - Pre-sorted by Days To Expire (soonest first)
+  - Subtotals row at bottom (sum of stock)
   - Pagination (50 items/page)
-- `ExportButtons` — CSV & PDF download
+  - Row header: "Showing X-Y of Z items | URGENT: N | SOON: N"
+- `ExportButtons` — CSV & PDF download + "Export all sections as PDF"
 
 **State:**
 - `file`: selected file
@@ -197,15 +211,23 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 
 ### CSV Export
 - Use `csv-writer` lib to generate CSV from results
-- File name: `[ReportName]_[YYYY-MM-DD].csv`
+- Include: header row, all data rows, subtotals row
+- File name: `[ReportName]_[YYYY-MM-DD_HHmm].csv`
 - Trigger download in browser
 
 ### PDF Export (Phase 1)
 - Client-side only: use `html2pdf` or `jspdf` to convert table HTML → PDF
-- File name: `[ReportName]_[YYYY-MM-DD].pdf`
+- Include: Report title + processing date/time + summary cards + full table with subtotals
+- File name: `[ReportName]_[YYYY-MM-DD_HHmm].pdf`
 - No pagination/multi-page logic; let browser handle rendering
 - Large datasets (150+ rows) may hit memory limits; acceptable for Phase 1
-- Future: consider server-side PDF generation if needed
+
+### Combined Export (Future Phase 2)
+- "Export all sections as PDF" button: generates single PDF with:
+  - Page 1: Summary cards + Average Sales Report table
+  - Page 2: Summary cards + Stock Aging Report table
+  - Page header: Company branding (space reserved)
+  - Footer: Export timestamp + page numbers
 
 ---
 
@@ -225,6 +247,30 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 - Show error banner (red bg, dismiss button)
 - Log errors to console
 - Retry button available after error
+
+---
+
+## Data Presentation & Trust
+
+**Processing Status Badge** (appears after upload):
+```
+✓ Processed: 250 items | 0 errors | Time: 2.3s
+```
+- Show processing metadata to build user confidence
+- Display timestamp of report generation (useful for audits)
+- Log any skipped/invalid rows with count
+
+**Summary Cards** (metrics at-a-glance):
+- Sales Report: 4 cards (Total Items, Total Revenue, Avg Qty/Txn, Avg Revenue/Txn)
+- Stock Aging: 4 cards (Total Stock Value, URGENT count, SOON count, SAFE count)
+- Use semantic colors (red for URGENT, yellow for SOON, green for SAFE)
+- Show full values (no truncation)
+
+**Data Presentation:**
+- Include subtotals row in all tables (critical for validation)
+- Show item count in page header ("Showing 1-50 of 250 items")
+- Use numeric formatting: 2 decimals for currency, 0 for quantities
+- Align numbers right in columns (easier to scan)
 
 ---
 
@@ -251,21 +297,32 @@ Required columns: `Item Code`, `Item Name`, `AVAILABLE STOCK`, `Days From Manufa
 
 **Sidebar:**
 - Fixed width (200px), dark background, light text
+- Top section: 2 nav items with icons
 - Active nav item: highlight with accent color + left border
+- Bottom section: "Recent Reports" (display 3 most recent uploads)
+  - Format: "[Report Type] - [Date] [Time]"
+  - Click to reload that report data
+  - Storage: Browser localStorage (session-only, no persistence)
 - Smooth transition between pages
 
 **File Upload:**
-- Drag-drop zone + click to select
-- Show selected file name
+- Drag-drop zone (clear label: "Drop [FILE_TYPE].csv here or click to browse")
+- Show selected file name + file size
+- "Use sample CSV" button (optional, loads demo data for quick testing)
 - "Upload & Process" button (disabled until file selected)
-- Clear/reset button to start over
+- Clear/reset button to start over ("Clear & upload new file")
+- Processing spinner shows estimated time ("Processing...")
+- Status badge appears after completion ("✓ Processed in 2.3s")
 
 **Table:**
 - Responsive (horizontal scroll on mobile if needed)
 - Header: dark bg, sortable column indicators (↑/↓)
-- Rows: alternating bg for readability
-- Hover: slight bg change
+- Rows: alternating bg for readability, hover: slight bg change
+- **Subtotals Row** (sticky at bottom): 
+  - Sales Report: SUM(Total Qty), SUM(Total Revenue) with bold styling
+  - Stock Aging: SUM(Total Stock) with bold styling
 - Pagination: Previous/Next buttons, "Showing X-Y of Z"
+- Summary row above table: "Showing X-Y of Z items" + quick stats (e.g., "URGENT: 5 items")
 
 **Status Badges (Stock Aging only):**
 - URGENT: red bg, white text
@@ -282,11 +339,14 @@ Required columns: `Item Code`, `Item Name`, `AVAILABLE STOCK`, `Days From Manufa
 ## Scope & Constraints
 
 - **No authentication** — open access
-- **No database** — all processing in-memory, no persistence
+- **No database** — all processing in-memory, no persistence of reports
+- **Recent Reports:** Stored in browser localStorage (3 most recent, expires on session end)
+- **Sample CSV:** Embedded demo data (small subset of provided CSVs, hardcoded in app)
 - **File size limit:** 50MB per upload
 - **Processing time:** expect < 5 seconds for both CSVs
 - **Offline:** Not required initially, but could add service worker later
 - **Mobile:** Responsive design (Tailwind), sidebar becomes drawer on mobile
+- **Subtotals:** Client-side calculation (sum of numeric columns at table bottom)
 
 ---
 
