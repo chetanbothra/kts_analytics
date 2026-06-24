@@ -1,0 +1,26 @@
+services:
+  web-dev:
+    image: node:24-alpine
+    container_name: kts-analytics-dev
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    ports:
+      - "3006:3000"
+    command: npm run dev
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+
+  web-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kts-analytics-prod
+    ports:
+      - "3005:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
