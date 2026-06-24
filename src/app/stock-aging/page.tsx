@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import FileUpload from "@/components/FileUpload";
 import { downloadCSV, downloadPDF } from "@/utils/exportUtils";
 import {
@@ -36,11 +36,67 @@ interface StockAgingItem {
 type SortField = keyof StockAgingItem;
 type SortOrder = "asc" | "desc";
 
+const SAMPLE_STOCK_DATA: StockAgingItem[] = [
+  {
+    itemCode: "1099",
+    itemName: "HAIR CONDITIONER ALMOND 100 G",
+    totalStock: 145,
+    daysFromMfg: 721,
+    daysToExpire: 8,
+    status: "URGENT",
+  },
+  {
+    itemCode: "150000713",
+    itemName: "PAPAD KALI MIRCH - T",
+    totalStock: 0,
+    daysFromMfg: 44,
+    daysToExpire: 135,
+    status: "SAFE",
+  },
+  {
+    itemCode: "150000718",
+    itemName: "CHANA DAL 500 GM (R1)",
+    totalStock: 60,
+    daysFromMfg: 62,
+    daysToExpire: 207,
+    status: "SAFE",
+  },
+  {
+    itemCode: "150000719",
+    itemName: "CHANA DAL 1000 GM (R1)",
+    totalStock: 20,
+    daysFromMfg: 62,
+    daysToExpire: 207,
+    status: "SAFE",
+  },
+  {
+    itemCode: "150000720",
+    itemName: "MOONG SABUT 500 GM (R1)",
+    totalStock: 4,
+    daysFromMfg: 30,
+    daysToExpire: 239,
+    status: "SAFE",
+  },
+  {
+    itemCode: "150000722",
+    itemName: "MOONG CHILKA 500 GM (R1)",
+    totalStock: 50,
+    daysFromMfg: 61,
+    daysToExpire: 208,
+    status: "SAFE",
+  },
+];
+
 export default function StockAgingPage() {
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [data, setData] = useState<StockAgingItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [processingStats, setProcessingStats] = useState<{
+    itemCount: number;
+    timeTaken: number;
+    errors: number;
+  } | null>(null);
 
   // Search & Pagination & Sorting States
   const [searchQuery, setSearchQuery] = useState("");
@@ -50,11 +106,67 @@ export default function StockAgingPage() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const itemsPerPage = 50;
 
+  useEffect(() => {
+    const handleReload = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.type === "Stock") {
+        const stored = sessionStorage.getItem("kts_active_stock_report");
+        if (stored) {
+          const report = JSON.parse(stored);
+          setData(report.data);
+          setFile(new File([], report.filename));
+          setProcessingStats({
+            itemCount: report.recordCount,
+            timeTaken: 0.1,
+            errors: 0,
+          });
+        }
+      }
+    };
+
+    window.addEventListener("kts-report-loaded", handleReload);
+
+    const stored = sessionStorage.getItem("kts_active_stock_report");
+    if (stored) {
+      const report = JSON.parse(stored);
+      setData(report.data);
+      setFile(new File([], report.filename));
+      setProcessingStats({
+        itemCount: report.recordCount,
+        timeTaken: 0.1,
+        errors: 0,
+      });
+    }
+
+    return () => {
+      window.removeEventListener("kts-report-loaded", handleReload);
+    };
+  }, []);
+
+  const saveRecentReport = (filename: string, recordCount: number, reportData: StockAgingItem[]) => {
+    const newReport = {
+      id: Math.random().toString(36).substring(2, 9),
+      type: "Stock",
+      filename,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      recordCount,
+      data: reportData,
+    };
+    const current = localStorage.getItem("kts_recent_reports");
+    let list = current ? JSON.parse(current) : [];
+    list = list.filter((r: any) => !(r.type === "Stock" && r.filename === filename));
+    list = [newReport, ...list].slice(0, 3);
+    localStorage.setItem("kts_recent_reports", JSON.stringify(list));
+    window.dispatchEvent(new Event("kts-recent-reports-updated"));
+  };
+
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile);
     setError(null);
     setIsLoading(true);
     setStatusFilter(null);
+    setProcessingStats(null);
+    const startTime = performance.now();
 
     const formData = new FormData();
     formData.append("file", selectedFile);
@@ -70,7 +182,14 @@ export default function StockAgingPage() {
         throw new Error(result.error || "Failed to process stock aging report");
       }
 
+      const duration = parseFloat(((performance.now() - startTime) / 1000).toFixed(1));
       setData(result.data);
+      setProcessingStats({
+        itemCount: result.recordCount,
+        timeTaken: duration,
+        errors: 0,
+      });
+      saveRecentReport(selectedFile.name, result.recordCount, result.data);
       setCurrentPage(1);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred");
@@ -80,12 +199,33 @@ export default function StockAgingPage() {
     }
   };
 
+  const handleUseSample = () => {
+    setError(null);
+    setIsLoading(true);
+    setProcessingStats(null);
+    setStatusFilter(null);
+    setTimeout(() => {
+      setData(SAMPLE_STOCK_DATA);
+      setFile(new File([], "CLOSING_SAMPLE.csv"));
+      setProcessingStats({
+        itemCount: SAMPLE_STOCK_DATA.length,
+        timeTaken: 0.1,
+        errors: 0,
+      });
+      saveRecentReport("CLOSING_SAMPLE.csv", SAMPLE_STOCK_DATA.length, SAMPLE_STOCK_DATA);
+      setIsLoading(false);
+      setCurrentPage(1);
+    }, 500);
+  };
+
   const handleClear = () => {
     setFile(null);
     setData([]);
     setError(null);
     setSearchQuery("");
     setStatusFilter(null);
+    setProcessingStats(null);
+    sessionStorage.removeItem("kts_active_stock_report");
   };
 
   // Sorting Handler
@@ -175,6 +315,12 @@ export default function StockAgingPage() {
     return result;
   }, [data, searchQuery, sortField, sortOrder, statusFilter]);
 
+  // Subtotals
+  const subtotals = useMemo(() => {
+    const totalStock = processedData.reduce((acc, item) => acc + item.totalStock, 0);
+    return { totalStock };
+  }, [processedData]);
+
   // Paginated Data
   const paginatedData = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -255,14 +401,14 @@ export default function StockAgingPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleExportCSV}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-slate-900/60 border border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-200 rounded-xl transition"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-slate-900/60 border border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-200 rounded-xl transition cursor-pointer"
             >
               <Download className="w-4 h-4 text-emerald-400" />
               Export CSV
             </button>
             <button
               onClick={handleExportPDF}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl shadow-lg shadow-emerald-600/30 transition-all duration-200"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl shadow-lg shadow-emerald-600/30 transition-all duration-200 cursor-pointer"
             >
               <FileText className="w-4 h-4" />
               Export PDF
@@ -281,6 +427,8 @@ export default function StockAgingPage() {
             onClear={handleClear}
             selectedFile={file}
             error={error}
+            hint="Drop CLOSING.csv here"
+            onUseSample={handleUseSample}
           />
           {isLoading && (
             <div className="flex flex-col items-center justify-center py-10 gap-3">
@@ -293,6 +441,13 @@ export default function StockAgingPage() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Processing Status Badge */}
+      {data.length > 0 && processingStats && (
+        <div className="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 animate-in fade-in duration-300">
+          ✓ {processingStats.itemCount} items processed in {processingStats.timeTaken}s | Errors: {processingStats.errors}
         </div>
       )}
 
@@ -438,6 +593,7 @@ export default function StockAgingPage() {
                         borderColor: "#334155",
                         borderRadius: "12px",
                       }}
+                      itemStyle={{ color: "#e2e8f0", fontSize: "12px" }}
                       labelClassName="text-slate-400 text-xs font-semibold"
                       formatter={(value: any) => [value, "Items Count"]}
                     />
@@ -480,7 +636,7 @@ export default function StockAgingPage() {
               <div className="pt-6 border-t border-slate-800/80">
                 <button
                   onClick={handleClear}
-                  className="w-full py-2.5 text-sm font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 rounded-xl transition flex items-center justify-center gap-2"
+                  className="w-full py-2.5 text-sm font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Clear Data & Upload New
@@ -490,7 +646,7 @@ export default function StockAgingPage() {
           </div>
 
           {/* Report Table View */}
-          <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl overflow-hidden flex flex-col backdrop-blur-sm">
+          <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl overflow-hidden flex flex-col backdrop-blur-sm max-h-[600px]">
             {/* Controls Bar */}
             <div className="p-5 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/10">
               <div className="relative max-w-sm w-full">
@@ -510,14 +666,14 @@ export default function StockAgingPage() {
               </div>
 
               <span className="text-xs font-semibold text-slate-400">
-                {processedData.length} records found
+                Showing {Math.min((currentPage - 1) * itemsPerPage + 1, processedData.length)}-{Math.min(currentPage * itemsPerPage, processedData.length)} of {processedData.length} items | URGENT: {processedData.filter(i => i.status === "URGENT").length} | SOON: {processedData.filter(i => i.status === "SOON").length}
               </span>
             </div>
 
             {/* Table Container */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
+            <div className="overflow-auto flex-1">
+              <table className="w-full text-left border-collapse relative">
+                <thead className="sticky top-0 z-10 bg-slate-950">
                   <tr className="bg-slate-900/40 text-slate-400 border-b border-slate-800/80 text-xs font-bold uppercase tracking-wider">
                     <th
                       onClick={() => handleSort("itemCode")}
@@ -592,6 +748,18 @@ export default function StockAgingPage() {
                     </tr>
                   )}
                 </tbody>
+                {/* Sticky Subtotals Row */}
+                {processedData.length > 0 && (
+                  <tfoot className="sticky bottom-0 z-10 bg-slate-900 border-t border-slate-800 shadow-[0_-2px_10px_rgba(0,0,0,0.5)]">
+                    <tr className="text-slate-200 font-bold text-sm">
+                      <td className="p-4" colSpan={2}>Subtotal</td>
+                      <td className="p-4 text-right">{subtotals.totalStock.toLocaleString()}</td>
+                      <td className="p-4 text-right text-slate-400">—</td>
+                      <td className="p-4 text-right text-slate-400">—</td>
+                      <td className="p-4 text-center text-slate-400">—</td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
 
@@ -607,7 +775,7 @@ export default function StockAgingPage() {
                   <button
                     onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
                     disabled={currentPage === 1}
-                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition"
+                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition cursor-pointer"
                   >
                     Previous
                   </button>
@@ -617,7 +785,7 @@ export default function StockAgingPage() {
                   <button
                     onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
                     disabled={currentPage === totalPages}
-                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition"
+                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition cursor-pointer"
                   >
                     Next
                   </button>

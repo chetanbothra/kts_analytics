@@ -8,6 +8,8 @@ interface FileUploadProps {
   onClear: () => void;
   selectedFile: File | null;
   error: string | null;
+  hint?: string;
+  onUseSample?: () => void;
 }
 
 export default function FileUpload({
@@ -16,6 +18,8 @@ export default function FileUpload({
   onClear,
   selectedFile,
   error,
+  hint = "Drag & drop your CSV file here",
+  onUseSample,
 }: FileUploadProps) {
   const [isDragActive, setIsDragActive] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -109,9 +113,9 @@ export default function FileUpload({
             </button>
           </div>
         ) : (
-          <div className="text-center">
+          <div className="text-center flex flex-col items-center">
             <p className="text-sm font-medium text-slate-300 mb-1">
-              Drag & drop your CSV file here, or{" "}
+              {hint}, or{" "}
               <button
                 onClick={onButtonClick}
                 disabled={isLoading}
@@ -120,9 +124,18 @@ export default function FileUpload({
                 browse
               </button>
             </p>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-500 mb-4">
               Only CSV files allowed (Max 50MB)
             </p>
+            {onUseSample && (
+              <button
+                onClick={onUseSample}
+                disabled={isLoading}
+                className="px-4 py-2 text-xs font-semibold text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-lg hover:bg-indigo-500/20 transition cursor-pointer"
+              >
+                Use sample CSV
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import FileUpload from "@/components/FileUpload";
 import { downloadCSV, downloadPDF } from "@/utils/exportUtils";
 import {
@@ -36,11 +36,67 @@ interface SalesReportItem {
 type SortField = keyof SalesReportItem;
 type SortOrder = "asc" | "desc";
 
+const SAMPLE_SALES_DATA: SalesReportItem[] = [
+  {
+    itemCode: "180026205",
+    itemName: "KESH K. ANTI DANDRUF HAIR CLEANSER 180ML",
+    totalQtySold: 108,
+    avgQtyPerTransaction: 36,
+    totalRevenue: 10259.58,
+    avgRevenuePerTransaction: 3419.86,
+  },
+  {
+    itemCode: "150001114",
+    itemName: "ATTA NOODLES CHATPATA FAMILY PACK 240 GM",
+    totalQtySold: 48,
+    avgQtyPerTransaction: 24,
+    totalRevenue: 1696.96,
+    avgRevenuePerTransaction: 848.48,
+  },
+  {
+    itemCode: "180031087",
+    itemName: "PATANJALI MUSTARD OIL 850 GM BTL",
+    totalQtySold: 12,
+    avgQtyPerTransaction: 12,
+    totalRevenue: 1967.4,
+    avgRevenuePerTransaction: 1967.4,
+  },
+  {
+    itemCode: "150000813",
+    itemName: "TRADITIONAL W.W CHAKKI ATTA W.BRAN 1K-T",
+    totalQtySold: 90,
+    avgQtyPerTransaction: 30,
+    totalRevenue: 4153.5,
+    avgRevenuePerTransaction: 1384.5,
+  },
+  {
+    itemCode: "180031036",
+    itemName: "COWS GHEE 900 ML",
+    totalQtySold: 15,
+    avgQtyPerTransaction: 15,
+    totalRevenue: 9641.7,
+    avgRevenuePerTransaction: 9641.7,
+  },
+  {
+    itemCode: "180026132",
+    itemName: "SOMYA LIQUID DETERGENT 500ML",
+    totalQtySold: 24,
+    avgQtyPerTransaction: 24,
+    totalRevenue: 1438.56,
+    avgRevenuePerTransaction: 1438.56,
+  },
+];
+
 export default function AverageSalesPage() {
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [data, setData] = useState<SalesReportItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [processingStats, setProcessingStats] = useState<{
+    itemCount: number;
+    timeTaken: number;
+    errors: number;
+  } | null>(null);
 
   // Search & Pagination & Sorting States
   const [searchQuery, setSearchQuery] = useState("");
@@ -49,10 +105,68 @@ export default function AverageSalesPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 50;
 
+  useEffect(() => {
+    const handleReload = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail?.type === "Sales") {
+        const stored = sessionStorage.getItem("kts_active_sales_report");
+        if (stored) {
+          const report = JSON.parse(stored);
+          setData(report.data);
+          setFile(new File([], report.filename));
+          setProcessingStats({
+            itemCount: report.recordCount,
+            timeTaken: 0.1,
+            errors: 0,
+          });
+        }
+      }
+    };
+
+    window.addEventListener("kts-report-loaded", handleReload);
+
+    // Initial check
+    const stored = sessionStorage.getItem("kts_active_sales_report");
+    if (stored) {
+      const report = JSON.parse(stored);
+      setData(report.data);
+      setFile(new File([], report.filename));
+      setProcessingStats({
+        itemCount: report.recordCount,
+        timeTaken: 0.1,
+        errors: 0,
+      });
+    }
+
+    return () => {
+      window.removeEventListener("kts-report-loaded", handleReload);
+    };
+  }, []);
+
+  const saveRecentReport = (filename: string, recordCount: number, reportData: SalesReportItem[]) => {
+    const newReport = {
+      id: Math.random().toString(36).substring(2, 9),
+      type: "Sales",
+      filename,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      recordCount,
+      data: reportData,
+    };
+    const current = localStorage.getItem("kts_recent_reports");
+    let list = current ? JSON.parse(current) : [];
+    // remove duplicates of same type/filename if any, to keep it clean
+    list = list.filter((r: any) => !(r.type === "Sales" && r.filename === filename));
+    list = [newReport, ...list].slice(0, 3);
+    localStorage.setItem("kts_recent_reports", JSON.stringify(list));
+    window.dispatchEvent(new Event("kts-recent-reports-updated"));
+  };
+
   const handleFileSelect = async (selectedFile: File) => {
     setFile(selectedFile);
     setError(null);
     setIsLoading(true);
+    setProcessingStats(null);
+    const startTime = performance.now();
 
     const formData = new FormData();
     formData.append("file", selectedFile);
@@ -68,7 +182,14 @@ export default function AverageSalesPage() {
         throw new Error(result.error || "Failed to process sales report");
       }
 
+      const duration = parseFloat(((performance.now() - startTime) / 1000).toFixed(1));
       setData(result.data);
+      setProcessingStats({
+        itemCount: result.recordCount,
+        timeTaken: duration,
+        errors: 0,
+      });
+      saveRecentReport(selectedFile.name, result.recordCount, result.data);
       setCurrentPage(1);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred");
@@ -78,11 +199,31 @@ export default function AverageSalesPage() {
     }
   };
 
+  const handleUseSample = () => {
+    setError(null);
+    setIsLoading(true);
+    setProcessingStats(null);
+    setTimeout(() => {
+      setData(SAMPLE_SALES_DATA);
+      setFile(new File([], "SALES_SAMPLE.csv"));
+      setProcessingStats({
+        itemCount: SAMPLE_SALES_DATA.length,
+        timeTaken: 0.1,
+        errors: 0,
+      });
+      saveRecentReport("SALES_SAMPLE.csv", SAMPLE_SALES_DATA.length, SAMPLE_SALES_DATA);
+      setIsLoading(false);
+      setCurrentPage(1);
+    }, 500);
+  };
+
   const handleClear = () => {
     setFile(null);
     setData([]);
     setError(null);
     setSearchQuery("");
+    setProcessingStats(null);
+    sessionStorage.removeItem("kts_active_sales_report");
   };
 
   // Sorting Handler
@@ -115,6 +256,22 @@ export default function AverageSalesPage() {
       topItemRevenue: topItem ? topItem.totalRevenue : 0,
     };
   }, [data]);
+
+  // Subtotals for all processed records (ignoring pagination, but matching search query)
+  const subtotals = useMemo(() => {
+    let list = [...data];
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      list = list.filter(
+        (item) =>
+          item.itemCode.toLowerCase().includes(query) ||
+          item.itemName.toLowerCase().includes(query)
+      );
+    }
+    const totalQty = list.reduce((acc, item) => acc + item.totalQtySold, 0);
+    const totalRev = list.reduce((acc, item) => acc + item.totalRevenue, 0);
+    return { totalQty, totalRev };
+  }, [data, searchQuery]);
 
   // Top 5 items for Chart
   const chartData = useMemo(() => {
@@ -220,14 +377,14 @@ export default function AverageSalesPage() {
           <div className="flex items-center gap-3">
             <button
               onClick={handleExportCSV}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-slate-900/60 border border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-200 rounded-xl transition"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-slate-900/60 border border-slate-800 hover:border-slate-700 hover:bg-slate-800/80 text-slate-200 rounded-xl transition cursor-pointer"
             >
               <Download className="w-4 h-4 text-indigo-400" />
               Export CSV
             </button>
             <button
               onClick={handleExportPDF}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl shadow-lg shadow-indigo-600/30 transition-all duration-200"
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl shadow-lg shadow-indigo-600/30 transition-all duration-200 cursor-pointer"
             >
               <FileText className="w-4 h-4" />
               Export PDF
@@ -246,6 +403,8 @@ export default function AverageSalesPage() {
             onClear={handleClear}
             selectedFile={file}
             error={error}
+            hint="Drop SALES.csv here"
+            onUseSample={handleUseSample}
           />
           {isLoading && (
             <div className="flex flex-col items-center justify-center py-10 gap-3">
@@ -258,6 +417,13 @@ export default function AverageSalesPage() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Processing Status Badge */}
+      {data.length > 0 && processingStats && (
+        <div className="inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-in fade-in duration-300">
+          ✓ {processingStats.itemCount} items processed in {processingStats.timeTaken}s | Errors: {processingStats.errors}
         </div>
       )}
 
@@ -367,6 +533,7 @@ export default function AverageSalesPage() {
                         borderColor: "#334155",
                         borderRadius: "12px",
                       }}
+                      itemStyle={{ color: "#e2e8f0", fontSize: "12px" }}
                       labelClassName="text-slate-400 text-xs font-semibold"
                       formatter={(value: any) => [`₹${Number(value).toLocaleString()}`, "Revenue"]}
                     />
@@ -417,7 +584,7 @@ export default function AverageSalesPage() {
               <div className="pt-6 border-t border-slate-800/80">
                 <button
                   onClick={handleClear}
-                  className="w-full py-2.5 text-sm font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 rounded-xl transition flex items-center justify-center gap-2"
+                  className="w-full py-2.5 text-sm font-semibold bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 hover:border-rose-500/30 rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className="w-4 h-4" />
                   Clear Data & Upload New
@@ -427,7 +594,7 @@ export default function AverageSalesPage() {
           </div>
 
           {/* Report Table View */}
-          <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl overflow-hidden flex flex-col backdrop-blur-sm">
+          <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl overflow-hidden flex flex-col backdrop-blur-sm max-h-[600px]">
             {/* Controls Bar */}
             <div className="p-5 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/10">
               <div className="relative max-w-sm w-full">
@@ -447,14 +614,14 @@ export default function AverageSalesPage() {
               </div>
 
               <span className="text-xs font-semibold text-slate-400">
-                {processedData.length} records found
+                Showing {Math.min((currentPage - 1) * itemsPerPage + 1, processedData.length)}-{Math.min(currentPage * itemsPerPage, processedData.length)} of {processedData.length} items
               </span>
             </div>
 
             {/* Table Container */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
+            <div className="overflow-auto flex-1">
+              <table className="w-full text-left border-collapse relative">
+                <thead className="sticky top-0 z-10 bg-slate-950">
                   <tr className="bg-slate-900/40 text-slate-400 border-b border-slate-800/80 text-xs font-bold uppercase tracking-wider">
                     <th
                       onClick={() => handleSort("itemCode")}
@@ -529,6 +696,18 @@ export default function AverageSalesPage() {
                     </tr>
                   )}
                 </tbody>
+                {/* Sticky Subtotals Row */}
+                {processedData.length > 0 && (
+                  <tfoot className="sticky bottom-0 z-10 bg-slate-900 border-t border-slate-800 shadow-[0_-2px_10px_rgba(0,0,0,0.5)]">
+                    <tr className="text-slate-200 font-bold text-sm">
+                      <td className="p-4" colSpan={2}>Subtotal</td>
+                      <td className="p-4 text-right">{subtotals.totalQty.toLocaleString()}</td>
+                      <td className="p-4 text-right text-slate-400">—</td>
+                      <td className="p-4 text-right text-indigo-400">₹{subtotals.totalRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                      <td className="p-4 text-right text-slate-400">—</td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
 
@@ -544,7 +723,7 @@ export default function AverageSalesPage() {
                   <button
                     onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
                     disabled={currentPage === 1}
-                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition"
+                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition cursor-pointer"
                   >
                     Previous
                   </button>
@@ -554,7 +733,7 @@ export default function AverageSalesPage() {
                   <button
                     onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
                     disabled={currentPage === totalPages}
-                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition"
+                    className="px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 disabled:opacity-40 disabled:hover:border-slate-800 text-slate-200 transition cursor-pointer"
                   >
                     Next
                   </button>
