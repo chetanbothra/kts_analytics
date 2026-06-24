@@ -96,13 +96,16 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 
 **Processing:**
 1. Parse CSV with papaparse
-2. Group by Item Code (since same item can have multiple batches)
+2. Group by Item Code (same item can have multiple batches)
 3. For each item, aggregate:
-   - Total available stock (sum of `AVAILABLE STOCK` across all batches)
-   - Days from manufacture (use **earliest manufacture date** to calculate days)
-   - Days to expire (use **soonest expiry date** — CRITICAL for sorting urgency)
+   - Total available stock: **sum** of `AVAILABLE STOCK` across all batches
+   - Days from manufacture: **select MAX** (oldest/earliest batch; higher days = older)
+   - Days to expire: **select MIN** (soonest expiry date; lower days = more urgent)
 4. Sort by `Days To Expire` (ascending — expiring soonest first)
-5. Add status flag: if `Days To Expire < 30`, mark as "URGENT"; if < 60, mark as "SOON"; else "SAFE"
+5. Add status flag:
+   - `Days To Expire < 30` → "URGENT" (red)
+   - `Days To Expire < 60` → "SOON" (yellow)
+   - Else → "SAFE" (green)
 
 **Response:**
 ```json
@@ -158,9 +161,11 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 
 **Flow:**
 1. User selects SALES CSV file
-2. POST to `/api/process-sales`
+2. POST to `/api/process-sales` (aggregates all transactions regardless of Bill Date)
 3. On success, populate table with results
 4. User can sort columns, paginate, export
+
+**Note:** Date filtering is out-of-scope for Phase 1. All transactions are aggregated.
 
 ---
 
@@ -195,10 +200,12 @@ Two-report analytics dashboard for KTS. Users import CSV files (SALES and CLOSIN
 - File name: `[ReportName]_[YYYY-MM-DD].csv`
 - Trigger download in browser
 
-### PDF Export
-- Use `html2pdf` to convert table HTML → PDF
-- Or generate table HTML, use `jspdf` + `@jspdf/plugin-html` for cleaner output
+### PDF Export (Phase 1)
+- Client-side only: use `html2pdf` or `jspdf` to convert table HTML → PDF
 - File name: `[ReportName]_[YYYY-MM-DD].pdf`
+- No pagination/multi-page logic; let browser handle rendering
+- Large datasets (150+ rows) may hit memory limits; acceptable for Phase 1
+- Future: consider server-side PDF generation if needed
 
 ---
 
