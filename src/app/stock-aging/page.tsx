@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import FileUpload from "@/components/FileUpload";
-import { downloadCSV, downloadPDF } from "@/utils/exportUtils";
+import { downloadCSV } from "@/utils/exportUtils";
 import {
   BarChart,
   Bar,
@@ -27,6 +27,13 @@ import {
 interface StockAgingItem {
   itemCode: string;
   itemName: string;
+  batch?: string;
+  district?: string;
+  mrp?: number;
+  costprice?: number;
+  closingStockAmount?: number;
+  mfgDate?: string;
+  expDate?: string;
   totalStock: number;
   daysFromMfg: number;
   daysToExpire: number;
@@ -318,7 +325,8 @@ export default function StockAgingPage() {
   // Subtotals
   const subtotals = useMemo(() => {
     const totalStock = processedData.reduce((acc, item) => acc + item.totalStock, 0);
-    return { totalStock };
+    const totalAmount = processedData.reduce((acc, item) => acc + (item.closingStockAmount || 0), 0);
+    return { totalStock, totalAmount };
   }, [processedData]);
 
   // Paginated Data
@@ -332,7 +340,14 @@ export default function StockAgingPage() {
   const csvHeaders = [
     { key: "itemCode", label: "Item Code" },
     { key: "itemName", label: "Item Name" },
+    { key: "batch", label: "Batch" },
+    { key: "district", label: "District" },
+    { key: "mrp", label: "MRP" },
+    { key: "costprice", label: "Cost Price" },
     { key: "totalStock", label: "Total Stock" },
+    { key: "closingStockAmount", label: "Closing Stock Amount" },
+    { key: "mfgDate", label: "MFG Date" },
+    { key: "expDate", label: "EXP Date" },
     { key: "daysFromMfg", label: "Days From Mfg" },
     { key: "daysToExpire", label: "Days To Expire" },
     { key: "status", label: "Status" },
@@ -340,18 +355,20 @@ export default function StockAgingPage() {
 
   const handleExportCSV = () => {
     const dateStr = new Date().toISOString().split("T")[0];
-    downloadCSV(processedData, `Stock_Aging_Report_${dateStr}.csv`, csvHeaders);
+    const uniqueDistricts = Array.from(new Set(processedData.map((d) => d.district).filter(Boolean)));
+    
+    if (uniqueDistricts.length <= 1) {
+      const districtSuffix = uniqueDistricts.length === 1 ? `-${uniqueDistricts[0]}` : "";
+      downloadCSV(processedData, `Stock_Aging_Report_${dateStr}${districtSuffix}.csv`, csvHeaders);
+    } else {
+      uniqueDistricts.forEach((district) => {
+        const districtData = processedData.filter((d) => d.district === district);
+        downloadCSV(districtData, `Stock_Aging_Report_${dateStr}-${district}.csv`, csvHeaders);
+      });
+    }
   };
 
-  const handleExportPDF = () => {
-    const dateStr = new Date().toISOString().split("T")[0];
-    downloadPDF(
-      processedData,
-      `Stock_Aging_Report_${dateStr}.pdf`,
-      "Stock Aging Report",
-      csvHeaders
-    );
-  };
+
 
   const renderSortIndicator = (field: SortField) => {
     if (sortField !== field) return null;
@@ -405,13 +422,6 @@ export default function StockAgingPage() {
             >
               <Download className="w-4 h-4 text-emerald-400" />
               Export CSV
-            </button>
-            <button
-              onClick={handleExportPDF}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl shadow-lg shadow-emerald-600/30 transition-all duration-200 cursor-pointer"
-            >
-              <FileText className="w-4 h-4" />
-              Export PDF
             </button>
           </div>
         )}
@@ -688,10 +698,52 @@ export default function StockAgingPage() {
                       Item Name {renderSortIndicator("itemName")}
                     </th>
                     <th
+                      onClick={() => handleSort("batch")}
+                      className="p-4 cursor-pointer hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Batch {renderSortIndicator("batch")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("district")}
+                      className="p-4 cursor-pointer hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      District {renderSortIndicator("district")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("mrp")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      MRP {renderSortIndicator("mrp")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("costprice")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Cost Price {renderSortIndicator("costprice")}
+                    </th>
+                    <th
                       onClick={() => handleSort("totalStock")}
                       className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
                     >
                       Total Stock {renderSortIndicator("totalStock")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("closingStockAmount")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Closing Stock Amount {renderSortIndicator("closingStockAmount")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("mfgDate")}
+                      className="p-4 cursor-pointer hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      MFG Date {renderSortIndicator("mfgDate")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("expDate")}
+                      className="p-4 cursor-pointer hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      EXP Date {renderSortIndicator("expDate")}
                     </th>
                     <th
                       onClick={() => handleSort("daysFromMfg")}
@@ -717,7 +769,7 @@ export default function StockAgingPage() {
                   {paginatedData.length > 0 ? (
                     paginatedData.map((item) => (
                       <tr
-                        key={item.itemCode}
+                        key={`${item.itemCode}-${item.batch || ""}-${item.district || ""}`}
                         className="hover:bg-slate-800/20 transition-all duration-100"
                       >
                         <td className="p-4 font-mono font-semibold text-indigo-400">
@@ -726,8 +778,29 @@ export default function StockAgingPage() {
                         <td className="p-4 font-medium text-slate-200">
                           {item.itemName}
                         </td>
+                        <td className="p-4 text-slate-400 font-mono">
+                          {item.batch || "—"}
+                        </td>
+                        <td className="p-4 text-slate-400">
+                          {item.district || "—"}
+                        </td>
+                        <td className="p-4 text-right font-mono">
+                          ₹{item.mrp?.toFixed(2)}
+                        </td>
+                        <td className="p-4 text-right font-mono">
+                          ₹{item.costprice?.toFixed(2)}
+                        </td>
                         <td className="p-4 text-right font-semibold">
                           {item.totalStock.toLocaleString()}
+                        </td>
+                        <td className="p-4 text-right font-semibold font-mono text-emerald-400">
+                          ₹{item.closingStockAmount?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td className="p-4 text-slate-400 font-mono">
+                          {item.mfgDate || "—"}
+                        </td>
+                        <td className="p-4 text-slate-400 font-mono">
+                          {item.expDate || "—"}
                         </td>
                         <td className="p-4 text-right text-slate-400">
                           {item.daysFromMfg} days
@@ -752,11 +825,10 @@ export default function StockAgingPage() {
                 {processedData.length > 0 && (
                   <tfoot className="sticky bottom-0 z-10 bg-slate-900 border-t border-slate-800 shadow-[0_-2px_10px_rgba(0,0,0,0.5)]">
                     <tr className="text-slate-200 font-bold text-sm">
-                      <td className="p-4" colSpan={2}>Subtotal</td>
+                      <td className="p-4" colSpan={6}>Subtotal</td>
                       <td className="p-4 text-right">{subtotals.totalStock.toLocaleString()}</td>
-                      <td className="p-4 text-right text-slate-400">—</td>
-                      <td className="p-4 text-right text-slate-400">—</td>
-                      <td className="p-4 text-center text-slate-400">—</td>
+                      <td className="p-4 text-right text-emerald-400 font-mono">₹{subtotals.totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                      <td className="p-4" colSpan={5}></td>
                     </tr>
                   </tfoot>
                 )}

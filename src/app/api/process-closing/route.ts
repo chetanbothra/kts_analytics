@@ -73,13 +73,19 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Grouping by Item Code
+    // Grouping by Item Code, Batch, and District
     const aggregated: Record<string, {
       itemCode: string;
       itemName: string;
+      batch: string;
+      district: string;
       totalStock: number;
       daysFromMfg: number;
       daysToExpire: number;
+      mrp: number;
+      costprice: number;
+      mfgDate: string;
+      expDate: string;
     }> = {};
 
     for (const row of parsed.data) {
@@ -88,30 +94,48 @@ export async function POST(request: NextRequest) {
       const rawStock = row["AVAILABLE STOCK"];
       const rawMfg = row["Days From Manufacture"];
       const rawExpire = row["Days To Expire"];
+      const rawBatch = row["batch"] || row["Batch"] || "UNKNOWN";
+      const rawDistrict = row["district"] || row["District"] || "N/A";
+      const rawMrp = row["mrp"] || row["MRP"] || "0";
+      const rawCost = row["costprice"] || row["cost"] || row["Cost Price"] || "0";
+      const rawMfgDate = row["MFG Date"] || row["mfg_date"] || "";
+      const rawExpDate = row["EXP Date"] || row["exp_date"] || "";
 
       if (!rawCode || !rawName) continue;
 
       const itemCode = rawCode.trim();
       const itemName = rawName.trim();
+      const batch = rawBatch.trim();
+      const district = rawDistrict.trim();
       if (!itemCode) continue;
 
       const stock = parseFloat(rawStock || "0");
       const mfg = parseFloat(rawMfg || "0");
       const expire = parseFloat(rawExpire || "0");
+      const mrpVal = parseFloat(rawMrp || "0");
+      const costVal = parseFloat(rawCost || "0");
 
       if (isNaN(stock) || isNaN(mfg) || isNaN(expire)) continue;
 
-      if (!aggregated[itemCode]) {
-        aggregated[itemCode] = {
+      const key = `${itemCode}_${batch}_${district}`;
+
+      if (!aggregated[key]) {
+        aggregated[key] = {
           itemCode,
           itemName,
+          batch,
+          district,
           totalStock: 0,
           daysFromMfg: -Infinity,
           daysToExpire: Infinity,
+          mrp: mrpVal,
+          costprice: costVal,
+          mfgDate: rawMfgDate,
+          expDate: rawExpDate,
         };
       }
 
-      const current = aggregated[itemCode];
+      const current = aggregated[key];
       current.totalStock += stock;
       current.daysFromMfg = Math.max(current.daysFromMfg, mfg);
       current.daysToExpire = Math.min(current.daysToExpire, expire);
@@ -130,10 +154,19 @@ export async function POST(request: NextRequest) {
         status = "SOON";
       }
 
+      const closingStockAmount = item.totalStock * item.costprice;
+
       return {
         itemCode: item.itemCode,
         itemName: item.itemName,
+        batch: item.batch,
+        district: item.district,
         totalStock: item.totalStock,
+        mrp: item.mrp,
+        costprice: item.costprice,
+        closingStockAmount: parseFloat(closingStockAmount.toFixed(2)),
+        mfgDate: item.mfgDate,
+        expDate: item.expDate,
         daysFromMfg,
         daysToExpire,
         status,
@@ -155,3 +188,5 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
+
