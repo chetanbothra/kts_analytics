@@ -5,8 +5,12 @@ interface SalesCsvRow {
   "Item Code"?: string;
   "Item Name"?: string;
   "Bill Date"?: string;
+  "Qty in CLD"?: string;
   "Qty in PCs"?: string;
   "Item Net Amount"?: string;
+  "Conversion Factor"?: string;
+  "district"?: string;
+  "District"?: string;
   [key: string]: string | undefined;
 }
 
@@ -57,7 +61,7 @@ export async function POST(request: NextRequest) {
     }
 
     const headers = parsed.meta.fields || [];
-    const requiredColumns = ["Item Code", "Item Name", "Qty in PCs", "Item Net Amount"];
+    const requiredColumns = ["Item Code", "Item Name", "Item Net Amount"];
     for (const col of requiredColumns) {
       if (!headers.includes(col)) {
         return NextResponse.json(
@@ -67,11 +71,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Grouping and aggregating by Item Code
+    // Grouping and aggregating by Item Code and District/Depot
     const aggregated: Record<string, {
       itemCode: string;
       itemName: string;
+      district: string;
       totalQtySold: number;
+      totalQtyCld: number;
+      conversionFactor: number;
       transactionCount: number;
       totalRevenue: number;
     }> = {};
@@ -79,33 +86,62 @@ export async function POST(request: NextRequest) {
     for (const row of parsed.data) {
       const rawCode = row["Item Code"];
       const rawName = row["Item Name"];
-      const rawQty = row["Qty in PCs"];
+      const rawQtyCld = row["Qty in CLD"];
+      const rawQtyPcs = row["Qty in PCs"];
       const rawRevenue = row["Item Net Amount"];
+      const rawConversionFactor = row["Conversion Factor"];
+      const rawDistrict = row["district"] || row["District"] || "N/A";
 
       if (!rawCode || !rawName) continue;
 
       const itemCode = rawCode.trim();
       const itemName = rawName.trim();
+      const district = rawDistrict.trim();
       if (!itemCode) continue;
 
-      const qty = parseFloat(rawQty || "0");
+      const conversionFactor = parseFloat(rawConversionFactor || "1");
+      const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
+
+      let qty = 0;
+      let qtyCld = 0;
+
+      // "yellow-highlighted quantity in the CLD sheet should be considered while calculating the sales average"
+      // If "Qty in CLD" is present and > 0, we use (Qty in CLD * Conversion Factor) as the quantity in PCs.
+      if (rawQtyCld && parseFloat(rawQtyCld) !== 0) {
+        qtyCld = parseFloat(rawQtyCld);
+        if (!isNaN(qtyCld)) {
+          qty = qtyCld * validCF;
+        } else {
+          qtyCld = 0;
+          qty = parseFloat(rawQtyPcs || "0");
+        }
+      } else {
+        qty = parseFloat(rawQtyPcs || "0");
+      }
+
       const revenue = parseFloat(rawRevenue || "0");
 
       if (isNaN(qty) || isNaN(revenue)) continue;
 
-      if (!aggregated[itemCode]) {
-        aggregated[itemCode] = {
+      const key = `${itemCode}_${district}`;
+
+      if (!aggregated[key]) {
+        aggregated[key] = {
           itemCode,
           itemName,
+          district,
           totalQtySold: 0,
+          totalQtyCld: 0,
+          conversionFactor: validCF,
           transactionCount: 0,
           totalRevenue: 0,
         };
       }
 
-      aggregated[itemCode].totalQtySold += qty;
-      aggregated[itemCode].totalRevenue += revenue;
-      aggregated[itemCode].transactionCount += 1;
+      aggregated[key].totalQtySold += qty;
+      aggregated[key].totalQtyCld += qtyCld;
+      aggregated[key].totalRevenue += revenue;
+      aggregated[key].transactionCount += 1;
     }
 
     // Format output and calculate averages
@@ -120,15 +156,22 @@ export async function POST(request: NextRequest) {
       return {
         itemCode: item.itemCode,
         itemName: item.itemName,
-        totalQtySold: item.totalQtySold,
+        district: item.district,
+        conversionFactor: item.conversionFactor,
+        totalQtyCld: parseFloat(item.totalQtyCld.toFixed(2)),
+        totalQtySold: parseFloat(item.totalQtySold.toFixed(2)),
         avgQtyPerTransaction,
         totalRevenue: parseFloat(item.totalRevenue.toFixed(2)),
         avgRevenuePerTransaction,
       };
     });
 
-    // Sort by Item Code
-    result.sort((a, b) => a.itemCode.localeCompare(b.itemCode));
+    // Sort by District, then Item Code
+    result.sort((a, b) => {
+      const distComp = a.district.localeCompare(b.district);
+      if (distComp !== 0) return distComp;
+      return a.itemCode.localeCompare(b.itemCode);
+    });
 
     return NextResponse.json({
       success: true,

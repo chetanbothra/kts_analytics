@@ -27,6 +27,9 @@ import {
 interface SalesReportItem {
   itemCode: string;
   itemName: string;
+  district: string;
+  conversionFactor: number;
+  totalQtyCld: number;
   totalQtySold: number;
   avgQtyPerTransaction: number;
   totalRevenue: number;
@@ -40,6 +43,9 @@ const SAMPLE_SALES_DATA: SalesReportItem[] = [
   {
     itemCode: "180026205",
     itemName: "KESH K. ANTI DANDRUF HAIR CLEANSER 180ML",
+    district: "Chennai",
+    conversionFactor: 36,
+    totalQtyCld: 3,
     totalQtySold: 108,
     avgQtyPerTransaction: 36,
     totalRevenue: 10259.58,
@@ -48,42 +54,13 @@ const SAMPLE_SALES_DATA: SalesReportItem[] = [
   {
     itemCode: "150001114",
     itemName: "ATTA NOODLES CHATPATA FAMILY PACK 240 GM",
+    district: "Chennai",
+    conversionFactor: 24,
+    totalQtyCld: 2,
     totalQtySold: 48,
     avgQtyPerTransaction: 24,
     totalRevenue: 1696.96,
     avgRevenuePerTransaction: 848.48,
-  },
-  {
-    itemCode: "180031087",
-    itemName: "PATANJALI MUSTARD OIL 850 GM BTL",
-    totalQtySold: 12,
-    avgQtyPerTransaction: 12,
-    totalRevenue: 1967.4,
-    avgRevenuePerTransaction: 1967.4,
-  },
-  {
-    itemCode: "150000813",
-    itemName: "TRADITIONAL W.W CHAKKI ATTA W.BRAN 1K-T",
-    totalQtySold: 90,
-    avgQtyPerTransaction: 30,
-    totalRevenue: 4153.5,
-    avgRevenuePerTransaction: 1384.5,
-  },
-  {
-    itemCode: "180031036",
-    itemName: "COWS GHEE 900 ML",
-    totalQtySold: 15,
-    avgQtyPerTransaction: 15,
-    totalRevenue: 9641.7,
-    avgRevenuePerTransaction: 9641.7,
-  },
-  {
-    itemCode: "180026132",
-    itemName: "SOMYA LIQUID DETERGENT 500ML",
-    totalQtySold: 24,
-    avgQtyPerTransaction: 24,
-    totalRevenue: 1438.56,
-    avgRevenuePerTransaction: 1438.56,
   },
 ];
 
@@ -103,6 +80,7 @@ export default function AverageSalesPage() {
   const [sortField, setSortField] = useState<SortField>("totalRevenue");
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [currentPage, setCurrentPage] = useState(1);
+  const [districtFilter, setDistrictFilter] = useState<string | null>(null);
   const itemsPerPage = 50;
 
   useEffect(() => {
@@ -166,6 +144,7 @@ export default function AverageSalesPage() {
     setError(null);
     setIsLoading(true);
     setProcessingStats(null);
+    setDistrictFilter(null);
     const startTime = performance.now();
 
     const formData = new FormData();
@@ -203,6 +182,7 @@ export default function AverageSalesPage() {
     setError(null);
     setIsLoading(true);
     setProcessingStats(null);
+    setDistrictFilter(null);
     setTimeout(() => {
       setData(SAMPLE_SALES_DATA);
       setFile(new File([], "SALES_SAMPLE.csv"));
@@ -222,6 +202,7 @@ export default function AverageSalesPage() {
     setData([]);
     setError(null);
     setSearchQuery("");
+    setDistrictFilter(null);
     setProcessingStats(null);
     sessionStorage.removeItem("kts_active_sales_report");
   };
@@ -237,13 +218,18 @@ export default function AverageSalesPage() {
     setCurrentPage(1);
   };
 
+  // Unique Districts for Filtering
+  const uniqueDistricts = useMemo(() => {
+    return Array.from(new Set(data.map((item) => item.district).filter(Boolean))).sort();
+  }, [data]);
+
   // KPI Metrics Calculation
   const metrics = useMemo(() => {
     if (data.length === 0) return null;
 
     const totalRevenue = data.reduce((acc, item) => acc + item.totalRevenue, 0);
     const totalQty = data.reduce((acc, item) => acc + item.totalQtySold, 0);
-    const uniqueItems = data.length;
+    const uniqueItems = new Set(data.map(d => d.itemCode)).size;
 
     // Find top item by revenue
     const topItem = [...data].sort((a, b) => b.totalRevenue - a.totalRevenue)[0];
@@ -257,38 +243,14 @@ export default function AverageSalesPage() {
     };
   }, [data]);
 
-  // Subtotals for all processed records (ignoring pagination, but matching search query)
-  const subtotals = useMemo(() => {
-    let list = [...data];
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      list = list.filter(
-        (item) =>
-          item.itemCode.toLowerCase().includes(query) ||
-          item.itemName.toLowerCase().includes(query)
-      );
-    }
-    const totalQty = list.reduce((acc, item) => acc + item.totalQtySold, 0);
-    const totalRev = list.reduce((acc, item) => acc + item.totalRevenue, 0);
-    return { totalQty, totalRev };
-  }, [data, searchQuery]);
-
-  // Top 5 items for Chart
-  const chartData = useMemo(() => {
-    return [...data]
-      .sort((a, b) => b.totalRevenue - a.totalRevenue)
-      .slice(0, 5)
-      .map((item) => ({
-        name: item.itemName.length > 20 ? item.itemName.slice(0, 20) + "..." : item.itemName,
-        fullName: item.itemName,
-        revenue: item.totalRevenue,
-        qty: item.totalQtySold,
-      }));
-  }, [data]);
-
   // Filtered & Sorted Data
   const processedData = useMemo(() => {
     let result = [...data];
+
+    // District filter
+    if (districtFilter) {
+      result = result.filter((item) => item.district === districtFilter);
+    }
 
     // Search filter
     if (searchQuery.trim()) {
@@ -319,7 +281,28 @@ export default function AverageSalesPage() {
     });
 
     return result;
-  }, [data, searchQuery, sortField, sortOrder]);
+  }, [data, searchQuery, sortField, sortOrder, districtFilter]);
+
+  // Subtotals for all processed records (ignoring pagination, but matching search/district query)
+  const subtotals = useMemo(() => {
+    const totalQtyCld = processedData.reduce((acc, item) => acc + item.totalQtyCld, 0);
+    const totalQty = processedData.reduce((acc, item) => acc + item.totalQtySold, 0);
+    const totalRev = processedData.reduce((acc, item) => acc + item.totalRevenue, 0);
+    return { totalQtyCld, totalQty, totalRev };
+  }, [processedData]);
+
+  // Top 5 items for Chart
+  const chartData = useMemo(() => {
+    return [...processedData]
+      .sort((a, b) => b.totalRevenue - a.totalRevenue)
+      .slice(0, 5)
+      .map((item) => ({
+        name: item.itemName.length > 20 ? item.itemName.slice(0, 20) + "..." : item.itemName,
+        fullName: item.itemName,
+        revenue: item.totalRevenue,
+        qty: item.totalQtySold,
+      }));
+  }, [processedData]);
 
   // Paginated Data
   const paginatedData = useMemo(() => {
@@ -332,7 +315,10 @@ export default function AverageSalesPage() {
   const csvHeaders = [
     { key: "itemCode", label: "Item Code" },
     { key: "itemName", label: "Item Name" },
-    { key: "totalQtySold", label: "Total Qty Sold" },
+    { key: "district", label: "Depot/District" },
+    { key: "conversionFactor", label: "Conversion Factor" },
+    { key: "totalQtyCld", label: "Total Qty Sold (CLD)" },
+    { key: "totalQtySold", label: "Total Qty Sold (PCs)" },
     { key: "avgQtyPerTransaction", label: "Avg Qty/Transaction" },
     { key: "totalRevenue", label: "Total Revenue" },
     { key: "avgRevenuePerTransaction", label: "Avg Revenue/Transaction" },
@@ -340,17 +326,17 @@ export default function AverageSalesPage() {
 
   const handleExportCSV = () => {
     const dateStr = new Date().toISOString().split("T")[0];
-    downloadCSV(processedData, `Average_Sales_Report_${dateStr}.csv`, csvHeaders);
-  };
-
-  const handleExportPDF = () => {
-    const dateStr = new Date().toISOString().split("T")[0];
-    downloadPDF(
-      processedData,
-      `Average_Sales_Report_${dateStr}.pdf`,
-      "Average Sales Report",
-      csvHeaders
-    );
+    const uniqueDistricts = Array.from(new Set(processedData.map((d) => d.district).filter(Boolean)));
+    
+    if (uniqueDistricts.length <= 1) {
+      const districtSuffix = uniqueDistricts.length === 1 ? `-${uniqueDistricts[0]}` : "";
+      downloadCSV(processedData, `Average_Sales_Report_${dateStr}${districtSuffix}.csv`, csvHeaders);
+    } else {
+      uniqueDistricts.forEach((district) => {
+        const districtData = processedData.filter((d) => d.district === district);
+        downloadCSV(districtData, `Average_Sales_Report_${dateStr}-${district}.csv`, csvHeaders);
+      });
+    }
   };
 
   const renderSortIndicator = (field: SortField) => {
@@ -369,7 +355,7 @@ export default function AverageSalesPage() {
             Average Sales Analytics
           </h1>
           <p className="text-slate-400 text-sm mt-1.5">
-            Visualize and analyze transactional sales metrics aggregated by item.
+            Visualize and analyze transactional sales metrics aggregated by item and depot.
           </p>
         </div>
 
@@ -381,13 +367,6 @@ export default function AverageSalesPage() {
             >
               <Download className="w-4 h-4 text-indigo-400" />
               Export CSV
-            </button>
-            <button
-              onClick={handleExportPDF}
-              className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white rounded-xl shadow-lg shadow-indigo-600/30 transition-all duration-200 cursor-pointer"
-            >
-              <FileText className="w-4 h-4" />
-              Export PDF
             </button>
           </div>
         )}
@@ -454,7 +433,7 @@ export default function AverageSalesPage() {
                 <div className="absolute top-0 right-0 w-24 h-24 bg-violet-500/5 rounded-full blur-2xl pointer-events-none" />
                 <div className="space-y-1">
                   <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                    Total Quantity
+                    Total Quantity (PCs)
                   </span>
                   <div className="text-2xl font-bold text-white tracking-tight">
                     {metrics.totalQty.toLocaleString()}
@@ -563,8 +542,8 @@ export default function AverageSalesPage() {
                       <span className="text-white font-bold">
                         ₹
                         {(
-                          data.reduce((acc, item) => acc + item.avgRevenuePerTransaction, 0) /
-                          data.length
+                          processedData.reduce((acc, item) => acc + item.avgRevenuePerTransaction, 0) /
+                          Math.max(1, processedData.length)
                         ).toFixed(2)}
                       </span>
                     </div>
@@ -572,8 +551,8 @@ export default function AverageSalesPage() {
                       <span className="text-slate-400 font-medium">Avg Quantity per Txn:</span>
                       <span className="text-white font-bold">
                         {(
-                          data.reduce((acc, item) => acc + item.avgQtyPerTransaction, 0) /
-                          data.length
+                          processedData.reduce((acc, item) => acc + item.avgQtyPerTransaction, 0) /
+                          Math.max(1, processedData.length)
                         ).toFixed(1)}{" "}
                         pcs
                       </span>
@@ -597,20 +576,41 @@ export default function AverageSalesPage() {
           <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl overflow-hidden flex flex-col backdrop-blur-sm max-h-[600px]">
             {/* Controls Bar */}
             <div className="p-5 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/10">
-              <div className="relative max-w-sm w-full">
-                <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Search className="w-4 h-4 text-slate-500" />
-                </span>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  placeholder="Search by code or name..."
-                  className="w-full pl-9 pr-4 py-2.5 text-sm bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none transition"
-                />
+              <div className="flex items-center gap-3 max-w-lg w-full">
+                <div className="relative flex-1">
+                  <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Search className="w-4 h-4 text-slate-500" />
+                  </span>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    placeholder="Search by code or name..."
+                    className="w-full pl-9 pr-4 py-2.5 text-sm bg-slate-900 border border-slate-800 hover:border-slate-700 focus:border-indigo-500 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none transition"
+                  />
+                </div>
+
+                {/* Depot/District Filter Dropdown */}
+                {uniqueDistricts.length > 0 && (
+                  <select
+                    value={districtFilter || ""}
+                    onChange={(e) => {
+                      setDistrictFilter(e.target.value || null);
+                      setCurrentPage(1);
+                    }}
+                    className="px-3 py-2.5 text-sm bg-slate-900 border border-slate-800 rounded-xl text-slate-300 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">All Depots</option>
+                    {uniqueDistricts.map((district) => (
+                      <option key={district} value={district}>
+                        {district}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <span className="text-xs font-semibold text-slate-400">
@@ -636,10 +636,28 @@ export default function AverageSalesPage() {
                       Item Name {renderSortIndicator("itemName")}
                     </th>
                     <th
+                      onClick={() => handleSort("district")}
+                      className="p-4 cursor-pointer hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Depot/District {renderSortIndicator("district")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("conversionFactor")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Conversion Factor {renderSortIndicator("conversionFactor")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("totalQtyCld")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Total Qty Sold (CLD) {renderSortIndicator("totalQtyCld")}
+                    </th>
+                    <th
                       onClick={() => handleSort("totalQtySold")}
                       className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
                     >
-                      Total Qty Sold {renderSortIndicator("totalQtySold")}
+                      Total Qty Sold (PCs) {renderSortIndicator("totalQtySold")}
                     </th>
                     <th
                       onClick={() => handleSort("avgQtyPerTransaction")}
@@ -665,7 +683,7 @@ export default function AverageSalesPage() {
                   {paginatedData.length > 0 ? (
                     paginatedData.map((item) => (
                       <tr
-                        key={item.itemCode}
+                        key={`${item.itemCode}-${item.district}`}
                         className="hover:bg-slate-800/20 transition-all duration-100"
                       >
                         <td className="p-4 font-mono font-semibold text-indigo-400">
@@ -673,6 +691,15 @@ export default function AverageSalesPage() {
                         </td>
                         <td className="p-4 font-medium text-slate-200">
                           {item.itemName}
+                        </td>
+                        <td className="p-4 text-slate-400">
+                          {item.district}
+                        </td>
+                        <td className="p-4 text-right font-mono text-slate-400">
+                          {item.conversionFactor}
+                        </td>
+                        <td className="p-4 text-right font-mono text-slate-400">
+                          {item.totalQtyCld.toLocaleString()}
                         </td>
                         <td className="p-4 text-right font-semibold">
                           {item.totalQtySold.toLocaleString()}
@@ -690,7 +717,7 @@ export default function AverageSalesPage() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={6} className="p-8 text-center text-slate-500 font-medium">
+                      <td colSpan={9} className="p-8 text-center text-slate-500 font-medium">
                         No matching records found.
                       </td>
                     </tr>
@@ -700,8 +727,9 @@ export default function AverageSalesPage() {
                 {processedData.length > 0 && (
                   <tfoot className="sticky bottom-0 z-10 bg-slate-900 border-t border-slate-800 shadow-[0_-2px_10px_rgba(0,0,0,0.5)]">
                     <tr className="text-slate-200 font-bold text-sm">
-                      <td className="p-4" colSpan={2}>Subtotal</td>
-                      <td className="p-4 text-right">{subtotals.totalQty.toLocaleString()}</td>
+                      <td className="p-4" colSpan={4}>Subtotal</td>
+                      <td className="p-4 text-right font-mono text-slate-400">{subtotals.totalQtyCld.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                      <td className="p-4 text-right">{subtotals.totalQty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                       <td className="p-4 text-right text-slate-400">—</td>
                       <td className="p-4 text-right text-indigo-400">₹{subtotals.totalRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                       <td className="p-4 text-right text-slate-400">—</td>
