@@ -34,6 +34,7 @@ interface SalesReportItem {
   avgQtyPerTransaction: number;
   totalRevenue: number;
   avgRevenuePerTransaction: number;
+  status: string;
 }
 
 type SortField = keyof SalesReportItem;
@@ -50,6 +51,7 @@ const SAMPLE_SALES_DATA: SalesReportItem[] = [
     avgQtyPerTransaction: 36,
     totalRevenue: 10259.58,
     avgRevenuePerTransaction: 3419.86,
+    status: "Active Sales",
   },
   {
     itemCode: "150001114",
@@ -61,11 +63,13 @@ const SAMPLE_SALES_DATA: SalesReportItem[] = [
     avgQtyPerTransaction: 24,
     totalRevenue: 1696.96,
     avgRevenuePerTransaction: 848.48,
+    status: "Active Sales",
   },
 ];
 
 export default function AverageSalesPage() {
-  const [file, setFile] = useState<File | null>(null);
+  const [salesFile, setSalesFile] = useState<File | null>(null);
+  const [masterFile, setMasterFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [data, setData] = useState<SalesReportItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -74,6 +78,9 @@ export default function AverageSalesPage() {
     timeTaken: number;
     errors: number;
   } | null>(null);
+
+  // Filter State: "all" | "active" | "missing"
+  const [salesFilter, setSalesFilter] = useState<"all" | "active" | "missing">("all");
 
   // Search & Pagination & Sorting States
   const [searchQuery, setSearchQuery] = useState("");
@@ -91,7 +98,7 @@ export default function AverageSalesPage() {
         if (stored) {
           const report = JSON.parse(stored);
           setData(report.data);
-          setFile(new File([], report.filename));
+          setSalesFile(new File([], report.filename));
           setProcessingStats({
             itemCount: report.recordCount,
             timeTaken: 0.1,
@@ -108,7 +115,7 @@ export default function AverageSalesPage() {
     if (stored) {
       const report = JSON.parse(stored);
       setData(report.data);
-      setFile(new File([], report.filename));
+      setSalesFile(new File([], report.filename));
       setProcessingStats({
         itemCount: report.recordCount,
         timeTaken: 0.1,
@@ -139,8 +146,11 @@ export default function AverageSalesPage() {
     window.dispatchEvent(new Event("kts-recent-reports-updated"));
   };
 
-  const handleFileSelect = async (selectedFile: File) => {
-    setFile(selectedFile);
+  const handleProcess = async () => {
+    if (!salesFile) {
+      setError("Please upload a Sales CSV file first.");
+      return;
+    }
     setError(null);
     setIsLoading(true);
     setProcessingStats(null);
@@ -148,7 +158,10 @@ export default function AverageSalesPage() {
     const startTime = performance.now();
 
     const formData = new FormData();
-    formData.append("file", selectedFile);
+    formData.append("file", salesFile);
+    if (masterFile) {
+      formData.append("masterFile", masterFile);
+    }
 
     try {
       const response = await fetch("/api/process-sales", {
@@ -168,7 +181,7 @@ export default function AverageSalesPage() {
         timeTaken: duration,
         errors: 0,
       });
-      saveRecentReport(selectedFile.name, result.recordCount, result.data);
+      saveRecentReport(salesFile.name, result.recordCount, result.data);
       setCurrentPage(1);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred");
@@ -185,7 +198,8 @@ export default function AverageSalesPage() {
     setDistrictFilter(null);
     setTimeout(() => {
       setData(SAMPLE_SALES_DATA);
-      setFile(new File([], "SALES_SAMPLE.csv"));
+      setSalesFile(new File([], "SALES_SAMPLE.csv"));
+      setMasterFile(null);
       setProcessingStats({
         itemCount: SAMPLE_SALES_DATA.length,
         timeTaken: 0.1,
@@ -198,12 +212,14 @@ export default function AverageSalesPage() {
   };
 
   const handleClear = () => {
-    setFile(null);
+    setSalesFile(null);
+    setMasterFile(null);
     setData([]);
     setError(null);
     setSearchQuery("");
     setDistrictFilter(null);
     setProcessingStats(null);
+    setSalesFilter("all");
     sessionStorage.removeItem("kts_active_sales_report");
   };
 
@@ -229,7 +245,8 @@ export default function AverageSalesPage() {
 
     const totalRevenue = data.reduce((acc, item) => acc + item.totalRevenue, 0);
     const totalQty = data.reduce((acc, item) => acc + item.totalQtySold, 0);
-    const uniqueItems = new Set(data.map(d => d.itemCode)).size;
+    const uniqueItems = new Set(data.filter(d => d.status !== "No Sales").map(d => d.itemCode)).size;
+    const missingCount = data.filter(d => d.status === "No Sales").length;
 
     // Find top item by revenue
     const topItem = [...data].sort((a, b) => b.totalRevenue - a.totalRevenue)[0];
@@ -238,6 +255,7 @@ export default function AverageSalesPage() {
       totalRevenue,
       totalQty,
       uniqueItems,
+      missingCount,
       topItemName: topItem ? topItem.itemName : "N/A",
       topItemRevenue: topItem ? topItem.totalRevenue : 0,
     };
@@ -250,6 +268,13 @@ export default function AverageSalesPage() {
     // District filter
     if (districtFilter) {
       result = result.filter((item) => item.district === districtFilter);
+    }
+
+    // Sales filter (all, active, missing)
+    if (salesFilter === "active") {
+      result = result.filter((item) => item.status === "Active Sales");
+    } else if (salesFilter === "missing") {
+      result = result.filter((item) => item.status === "No Sales");
     }
 
     // Search filter
@@ -281,7 +306,7 @@ export default function AverageSalesPage() {
     });
 
     return result;
-  }, [data, searchQuery, sortField, sortOrder, districtFilter]);
+  }, [data, searchQuery, sortField, sortOrder, districtFilter, salesFilter]);
 
   // Subtotals for all processed records (ignoring pagination, but matching search/district query)
   const subtotals = useMemo(() => {
@@ -322,6 +347,7 @@ export default function AverageSalesPage() {
     { key: "avgQtyPerTransaction", label: "Avg Qty/Transaction" },
     { key: "totalRevenue", label: "Total Revenue" },
     { key: "avgRevenuePerTransaction", label: "Avg Revenue/Transaction" },
+    { key: "status", label: "Status" },
   ];
 
   const handleExportCSV = () => {
@@ -374,26 +400,69 @@ export default function AverageSalesPage() {
 
       {/* File Upload Block */}
       {data.length === 0 && (
-        <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl p-6 md:p-8 backdrop-blur-md shadow-2xl relative overflow-hidden group">
-          <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-purple-500/5 opacity-50 group-hover:opacity-100 transition-opacity duration-500" />
-          <FileUpload
-            onFileSelect={handleFileSelect}
-            isLoading={isLoading}
-            onClear={handleClear}
-            selectedFile={file}
-            error={error}
-            hint="Drop SALES.csv here"
-            onUseSample={handleUseSample}
-          />
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Sales CSV Upload */}
+            <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md shadow-2xl relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-purple-500/5 opacity-50 group-hover:opacity-100 transition-opacity duration-500" />
+              <h3 className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">
+                1. Sales Data CSV (Required)
+              </h3>
+              <FileUpload
+                onFileSelect={(f) => { setSalesFile(f); setError(null); }}
+                isLoading={isLoading}
+                onClear={() => setSalesFile(null)}
+                selectedFile={salesFile}
+                error={null}
+                hint="Drop Sales CSV here"
+                onUseSample={handleUseSample}
+              />
+            </div>
+
+            {/* Master CSV Upload */}
+            <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md shadow-2xl relative overflow-hidden group">
+              <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-purple-500/5 opacity-50 group-hover:opacity-100 transition-opacity duration-500" />
+              <h3 className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">
+                2. Master / Closing Stock CSV (Optional - to find missing models)
+              </h3>
+              <FileUpload
+                onFileSelect={(f) => { setMasterFile(f); setError(null); }}
+                isLoading={isLoading}
+                onClear={() => setMasterFile(null)}
+                selectedFile={masterFile}
+                error={null}
+                hint="Drop CLOSING.csv here"
+              />
+            </div>
+          </div>
+
+          {/* Action Button */}
+          {salesFile && !isLoading && (
+            <div className="flex justify-center animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <button
+                onClick={handleProcess}
+                className="px-8 py-3.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold rounded-2xl shadow-lg hover:shadow-indigo-500/20 transition-all transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer text-sm tracking-wide"
+              >
+                Process Sales Analytics
+              </button>
+            </div>
+          )}
+
           {isLoading && (
-            <div className="flex flex-col items-center justify-center py-10 gap-3">
+            <div className="flex flex-col items-center justify-center py-10 gap-3 bg-slate-900/20 border border-slate-800/80 rounded-3xl">
               <div className="relative w-12 h-12">
                 <div className="absolute inset-0 border-4 border-indigo-500/20 rounded-full" />
                 <div className="absolute inset-0 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
               </div>
               <p className="text-sm font-medium text-slate-400 animate-pulse">
-                Analyzing transactions and generating statistics...
+                Analyzing transactions and mapping against master stock...
               </p>
+            </div>
+          )}
+
+          {error && (
+            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-400 font-medium">
+              {error}
             </div>
           )}
         </div>
@@ -411,7 +480,7 @@ export default function AverageSalesPage() {
         <div className="space-y-8 animate-in fade-in duration-500">
           {/* KPI Dashboard Row */}
           {metrics && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+            <div className={`grid grid-cols-1 md:grid-cols-2 ${metrics.missingCount > 0 ? "lg:grid-cols-5" : "lg:grid-cols-4"} gap-5`}>
               {/* Card 1: Revenue */}
               <div className="bg-slate-900/30 border border-slate-800/80 rounded-2xl p-5 flex items-center justify-between hover:border-slate-700/80 transition duration-300 backdrop-blur-sm relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none" />
@@ -478,6 +547,24 @@ export default function AverageSalesPage() {
                   <Award className="w-6 h-6" />
                 </div>
               </div>
+
+              {/* Card 5: Missing Models */}
+              {metrics.missingCount > 0 && (
+                <div className="bg-slate-900/30 border border-rose-950/80 rounded-2xl p-5 flex items-center justify-between hover:border-rose-900/80 transition duration-300 backdrop-blur-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-2xl pointer-events-none" />
+                  <div className="space-y-1">
+                    <span className="text-xs font-semibold text-rose-400 uppercase tracking-wider block">
+                      Missing Models
+                    </span>
+                    <div className="text-2xl font-bold text-rose-450 tracking-tight text-rose-400">
+                      {metrics.missingCount}
+                    </div>
+                  </div>
+                  <div className="p-3 bg-rose-500/10 rounded-xl text-rose-400">
+                    <Layers className="w-6 h-6 animate-pulse" />
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -575,9 +662,9 @@ export default function AverageSalesPage() {
           {/* Report Table View */}
           <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl overflow-hidden flex flex-col backdrop-blur-sm max-h-[600px]">
             {/* Controls Bar */}
-            <div className="p-5 border-b border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900/10">
-              <div className="flex items-center gap-3 max-w-lg w-full">
-                <div className="relative flex-1">
+            <div className="p-5 border-b border-slate-800/80 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/10">
+              <div className="flex flex-wrap items-center gap-3 max-w-2xl w-full">
+                <div className="relative min-w-[200px] flex-1">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                     <Search className="w-4 h-4 text-slate-500" />
                   </span>
@@ -610,6 +697,30 @@ export default function AverageSalesPage() {
                       </option>
                     ))}
                   </select>
+                )}
+
+                {/* Filter Tabs */}
+                {metrics && metrics.missingCount > 0 && (
+                  <div className="flex items-center bg-slate-900 p-1 border border-slate-800 rounded-xl">
+                    <button
+                      onClick={() => { setSalesFilter("all"); setCurrentPage(1); }}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${salesFilter === "all" ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20" : "text-slate-400 hover:text-white"}`}
+                    >
+                      All
+                    </button>
+                    <button
+                      onClick={() => { setSalesFilter("active"); setCurrentPage(1); }}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${salesFilter === "active" ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20" : "text-slate-400 hover:text-white"}`}
+                    >
+                      Active
+                    </button>
+                    <button
+                      onClick={() => { setSalesFilter("missing"); setCurrentPage(1); }}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${salesFilter === "missing" ? "bg-rose-500/10 text-rose-400 border border-rose-500/20" : "text-slate-400 hover:text-white"}`}
+                    >
+                      Missing ({metrics.missingCount})
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -677,6 +788,9 @@ export default function AverageSalesPage() {
                     >
                       Avg Revenue/Txn {renderSortIndicator("avgRevenuePerTransaction")}
                     </th>
+                    <th className="p-4 text-center">
+                      Status
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/50 text-sm text-slate-300">
@@ -684,7 +798,7 @@ export default function AverageSalesPage() {
                     paginatedData.map((item) => (
                       <tr
                         key={`${item.itemCode}-${item.district}`}
-                        className="hover:bg-slate-800/20 transition-all duration-100"
+                        className={`hover:bg-slate-800/20 transition-all duration-100 ${item.status === "No Sales" ? "bg-rose-950/5 opacity-60 hover:opacity-100" : ""}`}
                       >
                         <td className="p-4 font-mono font-semibold text-indigo-400">
                           {item.itemCode}
@@ -713,11 +827,22 @@ export default function AverageSalesPage() {
                         <td className="p-4 text-right text-slate-400">
                           ₹{item.avgRevenuePerTransaction.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </td>
+                        <td className="p-4 text-center">
+                          {item.status === "No Sales" ? (
+                            <span className="inline-flex px-2 py-0.5 rounded-md text-xs font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                              No Sales
+                            </span>
+                          ) : (
+                            <span className="inline-flex px-2 py-0.5 rounded-md text-xs font-bold bg-emerald-500/10 text-emerald-450 text-emerald-450 text-emerald-450 border border-emerald-500/20 text-emerald-400">
+                              Active
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="p-8 text-center text-slate-500 font-medium">
+                      <td colSpan={10} className="p-8 text-center text-slate-500 font-medium">
                         No matching records found.
                       </td>
                     </tr>
@@ -733,6 +858,7 @@ export default function AverageSalesPage() {
                       <td className="p-4 text-right text-slate-400">—</td>
                       <td className="p-4 text-right text-indigo-400">₹{subtotals.totalRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                       <td className="p-4 text-right text-slate-400">—</td>
+                      <td className="p-4 text-center text-slate-400">—</td>
                     </tr>
                   </tfoot>
                 )}

@@ -83,6 +83,8 @@ export async function POST(request: NextRequest) {
       totalRevenue: number;
     }> = {};
 
+    const activeDistricts = new Set<string>();
+
     for (const row of parsed.data) {
       const rawCode = row["Item Code"];
       const rawName = row["Item Name"];
@@ -99,6 +101,8 @@ export async function POST(request: NextRequest) {
       const district = rawDistrict.trim();
       if (!itemCode) continue;
 
+      activeDistricts.add(district);
+
       const conversionFactor = parseFloat(rawConversionFactor || "1");
       const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
 
@@ -106,7 +110,6 @@ export async function POST(request: NextRequest) {
       let qtyCld = 0;
 
       // "yellow-highlighted quantity in the CLD sheet should be considered while calculating the sales average"
-      // If "Qty in CLD" is present and > 0, we use (Qty in CLD * Conversion Factor) as the quantity in PCs.
       if (rawQtyCld && parseFloat(rawQtyCld) !== 0) {
         qtyCld = parseFloat(rawQtyCld);
         if (!isNaN(qtyCld)) {
@@ -144,6 +147,55 @@ export async function POST(request: NextRequest) {
       aggregated[key].transactionCount += 1;
     }
 
+    // Process optional master file to find missing models
+    const masterFile = formData.get("masterFile") as File | null;
+    if (masterFile && masterFile.size > 0) {
+      const masterContent = await masterFile.text();
+      const parsedMaster = Papa.parse<any>(masterContent, {
+        header: true,
+        skipEmptyLines: true,
+      });
+
+      const masterHeaders = parsedMaster.meta.fields || [];
+      if (masterHeaders.includes("Item Code")) {
+        for (const row of parsedMaster.data) {
+          const rawCode = row["Item Code"];
+          const rawName = row["Item Name"];
+          const rawCF = row["Conversion Factor"];
+          // Use district from row, fallback to first active district or 'Chennai'
+          const rawDistrict = row["district"] || row["District"] || (activeDistricts.size > 0 ? Array.from(activeDistricts)[0] : "Chennai");
+
+          if (!rawCode) continue;
+
+          const itemCode = rawCode.trim();
+          const itemName = (rawName || "").trim();
+          const district = rawDistrict.trim();
+
+          // We only align with districts that actually exist in active sales report
+          if (activeDistricts.size > 0 && !activeDistricts.has(district)) {
+            continue;
+          }
+
+          const key = `${itemCode}_${district}`;
+          if (!aggregated[key]) {
+            const conversionFactor = parseFloat(rawCF || "1");
+            const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
+            
+            aggregated[key] = {
+              itemCode,
+              itemName: itemName || `Product ${itemCode}`,
+              district,
+              totalQtySold: 0,
+              totalQtyCld: 0,
+              conversionFactor: validCF,
+              transactionCount: 0,
+              totalRevenue: 0,
+            };
+          }
+        }
+      }
+    }
+
     // Format output and calculate averages
     const result = Object.values(aggregated).map((item) => {
       const avgQtyPerTransaction = item.transactionCount > 0
@@ -152,6 +204,8 @@ export async function POST(request: NextRequest) {
       const avgRevenuePerTransaction = item.transactionCount > 0
         ? parseFloat((item.totalRevenue / item.transactionCount).toFixed(2))
         : 0;
+
+      const hasSales = item.transactionCount > 0;
 
       return {
         itemCode: item.itemCode,
@@ -163,6 +217,7 @@ export async function POST(request: NextRequest) {
         avgQtyPerTransaction,
         totalRevenue: parseFloat(item.totalRevenue.toFixed(2)),
         avgRevenuePerTransaction,
+        status: hasSales ? "Active Sales" : "No Sales",
       };
     });
 
