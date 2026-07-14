@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import FileUpload from "@/components/FileUpload";
 import { downloadCSV, downloadPDF } from "@/utils/exportUtils";
+import Papa from "papaparse";
 import {
   BarChart,
   Bar,
@@ -157,31 +158,190 @@ export default function AverageSalesPage() {
     setDistrictFilter(null);
     const startTime = performance.now();
 
-    const formData = new FormData();
-    formData.append("file", salesFile);
-    if (masterFile) {
-      formData.append("masterFile", masterFile);
-    }
-
     try {
-      const response = await fetch("/api/process-sales", {
-        method: "POST",
-        body: formData,
-      });
-
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || "Failed to process sales report");
+      const fileContent = await salesFile.text();
+      if (!fileContent.trim()) {
+        throw new Error("CSV file is empty");
       }
 
+      const parsed = Papa.parse<any>(fileContent, {
+        header: true,
+        skipEmptyLines: true,
+      });
+
+      if (parsed.errors.length > 0 && parsed.data.length === 0) {
+        throw new Error(`Error parsing CSV: ${parsed.errors[0].message}`);
+      }
+
+      const headers = parsed.meta.fields || [];
+      const requiredColumns = ["Item Code", "Item Name", "Item Net Amount"];
+      for (const col of requiredColumns) {
+        if (!headers.includes(col)) {
+          throw new Error(`CSV missing required column: ${col}`);
+        }
+      }
+
+      // Grouping and aggregating by Item Code and District/Depot
+      const aggregated: Record<string, {
+        itemCode: string;
+        itemName: string;
+        district: string;
+        totalQtySold: number;
+        totalQtyCld: number;
+        conversionFactor: number;
+        transactionCount: number;
+        totalRevenue: number;
+      }> = {};
+
+      const activeDistricts = new Set<string>();
+
+      for (const row of parsed.data) {
+        const rawCode = row["Item Code"];
+        const rawName = row["Item Name"];
+        const rawQtyCld = row["Qty in CLD"];
+        const rawQtyPcs = row["Qty in PCs"];
+        const rawRevenue = row["Item Net Amount"];
+        const rawConversionFactor = row["Conversion Factor"];
+        const rawDistrict = row["district"] || row["District"] || "N/A";
+
+        if (!rawCode || !rawName) continue;
+
+        const itemCode = rawCode.trim();
+        const itemName = rawName.trim();
+        const district = rawDistrict.trim();
+        if (!itemCode) continue;
+
+        activeDistricts.add(district);
+
+        const conversionFactor = parseFloat(rawConversionFactor || "1");
+        const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
+
+        let qty = 0;
+        let qtyCld = 0;
+
+        if (rawQtyCld && parseFloat(rawQtyCld) !== 0) {
+          qtyCld = parseFloat(rawQtyCld);
+          if (!isNaN(qtyCld)) {
+            qty = qtyCld * validCF;
+          } else {
+            qtyCld = 0;
+            qty = parseFloat(rawQtyPcs || "0");
+          }
+        } else {
+          qty = parseFloat(rawQtyPcs || "0");
+        }
+
+        const revenue = parseFloat(rawRevenue || "0");
+
+        if (isNaN(qty) || isNaN(revenue)) continue;
+
+        const key = `${itemCode}_${district}`;
+
+        if (!aggregated[key]) {
+          aggregated[key] = {
+            itemCode,
+            itemName,
+            district,
+            totalQtySold: 0,
+            totalQtyCld: 0,
+            conversionFactor: validCF,
+            transactionCount: 0,
+            totalRevenue: 0,
+          };
+        }
+
+        aggregated[key].totalQtySold += qty;
+        aggregated[key].totalQtyCld += qtyCld;
+        aggregated[key].totalRevenue += revenue;
+        aggregated[key].transactionCount += 1;
+      }
+
+      // Process optional master file to find missing models
+      if (masterFile && masterFile.size > 0) {
+        const masterContent = await masterFile.text();
+        const parsedMaster = Papa.parse<any>(masterContent, {
+          header: true,
+          skipEmptyLines: true,
+        });
+
+        const masterHeaders = parsedMaster.meta.fields || [];
+        if (masterHeaders.includes("Item Code")) {
+          for (const row of parsedMaster.data) {
+            const rawCode = row["Item Code"];
+            const rawName = row["Item Name"];
+            const rawCF = row["Conversion Factor"];
+            const rawDistrict = row["district"] || row["District"] || (activeDistricts.size > 0 ? Array.from(activeDistricts)[0] : "Chennai");
+
+            if (!rawCode) continue;
+
+            const itemCode = rawCode.trim();
+            const itemName = (rawName || "").trim();
+            const district = rawDistrict.trim();
+
+            if (activeDistricts.size > 0 && !activeDistricts.has(district)) {
+              continue;
+            }
+
+            const key = `${itemCode}_${district}`;
+            if (!aggregated[key]) {
+              const conversionFactor = parseFloat(rawCF || "1");
+              const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
+              
+              aggregated[key] = {
+                itemCode,
+                itemName: itemName || `Product ${itemCode}`,
+                district,
+                totalQtySold: 0,
+                totalQtyCld: 0,
+                conversionFactor: validCF,
+                transactionCount: 0,
+                totalRevenue: 0,
+              };
+            }
+          }
+        }
+      }
+
+      // Format output and calculate averages
+      const result = Object.values(aggregated).map((item) => {
+        const avgQtyPerTransaction = item.transactionCount > 0
+          ? parseFloat((item.totalQtySold / item.transactionCount).toFixed(2))
+          : 0;
+        const avgRevenuePerTransaction = item.transactionCount > 0
+          ? parseFloat((item.totalRevenue / item.transactionCount).toFixed(2))
+          : 0;
+
+        const hasSales = item.transactionCount > 0;
+
+        return {
+          itemCode: item.itemCode,
+          itemName: item.itemName,
+          district: item.district,
+          conversionFactor: item.conversionFactor,
+          totalQtyCld: parseFloat(item.totalQtyCld.toFixed(2)),
+          totalQtySold: parseFloat(item.totalQtySold.toFixed(2)),
+          avgQtyPerTransaction,
+          totalRevenue: parseFloat(item.totalRevenue.toFixed(2)),
+          avgRevenuePerTransaction,
+          status: hasSales ? "Active Sales" : "No Sales",
+        };
+      });
+
+      // Sort by District, then Item Code
+      result.sort((a, b) => {
+        const distComp = a.district.localeCompare(b.district);
+        if (distComp !== 0) return distComp;
+        return a.itemCode.localeCompare(b.itemCode);
+      });
+
       const duration = parseFloat(((performance.now() - startTime) / 1000).toFixed(1));
-      setData(result.data);
+      setData(result);
       setProcessingStats({
-        itemCount: result.recordCount,
+        itemCount: result.length,
         timeTaken: duration,
         errors: 0,
       });
-      saveRecentReport(salesFile.name, result.recordCount, result.data);
+      saveRecentReport(salesFile.name, result.length, result);
       setCurrentPage(1);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred");

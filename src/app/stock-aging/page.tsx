@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import FileUpload from "@/components/FileUpload";
 import { downloadCSV } from "@/utils/exportUtils";
+import Papa from "papaparse";
 import {
   BarChart,
   Bar,
@@ -175,28 +176,145 @@ export default function StockAgingPage() {
     setProcessingStats(null);
     const startTime = performance.now();
 
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-
     try {
-      const response = await fetch("/api/process-closing", {
-        method: "POST",
-        body: formData,
-      });
-
-      const result = await response.json();
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || "Failed to process stock aging report");
+      const fileContent = await selectedFile.text();
+      if (!fileContent.trim()) {
+        throw new Error("CSV file is empty");
       }
 
+      const parsed = Papa.parse<any>(fileContent, {
+        header: true,
+        skipEmptyLines: true,
+      });
+
+      if (parsed.errors.length > 0 && parsed.data.length === 0) {
+        throw new Error(`Error parsing CSV: ${parsed.errors[0].message}`);
+      }
+
+      const headers = parsed.meta.fields || [];
+      const requiredColumns = [
+        "Item Code",
+        "Item Name",
+        "AVAILABLE STOCK",
+        "Days From Manufacture",
+        "Days To Expire",
+      ];
+      for (const col of requiredColumns) {
+        if (!headers.includes(col)) {
+          throw new Error(`CSV missing required column: ${col}`);
+        }
+      }
+
+      // Grouping by Item Code, Batch, and District
+      const aggregated: Record<string, {
+        itemCode: string;
+        itemName: string;
+        batch: string;
+        district: string;
+        totalStock: number;
+        daysFromMfg: number;
+        daysToExpire: number;
+        mrp: number;
+        costprice: number;
+        mfgDate: string;
+        expDate: string;
+      }> = {};
+
+      for (const row of parsed.data) {
+        const rawCode = row["Item Code"];
+        const rawName = row["Item Name"];
+        const rawStock = row["AVAILABLE STOCK"];
+        const rawMfg = row["Days From Manufacture"];
+        const rawExpire = row["Days To Expire"];
+        const rawBatch = row["batch"] || row["Batch"] || "UNKNOWN";
+        const rawDistrict = row["district"] || row["District"] || "N/A";
+        const rawMrp = row["mrp"] || row["MRP"] || "0";
+        const rawCost = row["costprice"] || row["cost"] || row["Cost Price"] || "0";
+        const rawMfgDate = row["MFG Date"] || row["mfg_date"] || "";
+        const rawExpDate = row["EXP Date"] || row["exp_date"] || "";
+
+        if (!rawCode || !rawName) continue;
+
+        const itemCode = rawCode.trim();
+        const itemName = rawName.trim();
+        const batch = rawBatch.trim();
+        const district = rawDistrict.trim();
+        if (!itemCode) continue;
+
+        const stock = parseFloat(rawStock || "0");
+        const mfg = parseFloat(rawMfg || "0");
+        const expire = parseFloat(rawExpire || "0");
+        const mrpVal = parseFloat(rawMrp || "0");
+        const costVal = parseFloat(rawCost || "0");
+
+        if (isNaN(stock) || isNaN(mfg) || isNaN(expire)) continue;
+
+        const key = `${itemCode}_${batch}_${district}`;
+
+        if (!aggregated[key]) {
+          aggregated[key] = {
+            itemCode,
+            itemName,
+            batch,
+            district,
+            totalStock: 0,
+            daysFromMfg: -Infinity,
+            daysToExpire: Infinity,
+            mrp: mrpVal,
+            costprice: costVal,
+            mfgDate: rawMfgDate,
+            expDate: rawExpDate,
+          };
+        }
+
+        const current = aggregated[key];
+        current.totalStock += stock;
+        current.daysFromMfg = Math.max(current.daysFromMfg, mfg);
+        current.daysToExpire = Math.min(current.daysToExpire, expire);
+      }
+
+      // Format output, status and sort by Days To Expire (ascending)
+      const result = Object.values(aggregated).map((item) => {
+        const daysFromMfg = item.daysFromMfg === -Infinity ? 0 : item.daysFromMfg;
+        const daysToExpire = item.daysToExpire === Infinity ? 9999 : item.daysToExpire;
+
+        let status = "SAFE";
+        if (daysToExpire < 30) {
+          status = "URGENT";
+        } else if (daysToExpire < 60) {
+          status = "SOON";
+        }
+
+        const closingStockAmount = item.totalStock * item.costprice;
+
+        return {
+          itemCode: item.itemCode,
+          itemName: item.itemName,
+          batch: item.batch,
+          district: item.district,
+          totalStock: item.totalStock,
+          mrp: item.mrp,
+          costprice: item.costprice,
+          closingStockAmount: parseFloat(closingStockAmount.toFixed(2)),
+          mfgDate: item.mfgDate,
+          expDate: item.expDate,
+          daysFromMfg,
+          daysToExpire,
+          status,
+        };
+      });
+
+      // Sort by Days To Expire (ascending - soonest expiry first)
+      result.sort((a, b) => a.daysToExpire - b.daysToExpire);
+
       const duration = parseFloat(((performance.now() - startTime) / 1000).toFixed(1));
-      setData(result.data);
+      setData(result);
       setProcessingStats({
-        itemCount: result.recordCount,
+        itemCount: result.length,
         timeTaken: duration,
         errors: 0,
       });
-      saveRecentReport(selectedFile.name, result.recordCount, result.data);
+      saveRecentReport(selectedFile.name, result.length, result);
       setCurrentPage(1);
     } catch (err: any) {
       setError(err.message || "An unexpected error occurred");
