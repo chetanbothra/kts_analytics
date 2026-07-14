@@ -179,7 +179,7 @@ export default function StockAgingPage() {
     try {
       const fileContent = await selectedFile.text();
       if (!fileContent.trim()) {
-        throw new Error("CSV file is empty");
+        throw new Error("File Upload Error:\n- The selected CSV file is empty.");
       }
 
       const parsed = Papa.parse<any>(fileContent, {
@@ -188,7 +188,7 @@ export default function StockAgingPage() {
       });
 
       if (parsed.errors.length > 0 && parsed.data.length === 0) {
-        throw new Error(`Error parsing CSV: ${parsed.errors[0].message}`);
+        throw new Error(`CSV Parsing Error:\n- ${parsed.errors[0].message} (Line ${parsed.errors[0].row})`);
       }
 
       const headers = parsed.meta.fields || [];
@@ -199,13 +199,16 @@ export default function StockAgingPage() {
         "Days From Manufacture",
         "Days To Expire",
       ];
-      for (const col of requiredColumns) {
-        if (!headers.includes(col)) {
-          throw new Error(`CSV missing required column: ${col}`);
-        }
+      const missingCols = requiredColumns.filter(col => !headers.includes(col));
+      
+      if (missingCols.length > 0) {
+        throw new Error(
+          `Column Validation Error:\n` +
+          `- Missing required column(s): ${missingCols.map(c => `"${c}"`).join(", ")}\n` +
+          `- Detected headers in your file: ${headers.slice(0, 8).join(", ")}${headers.length > 8 ? "..." : ""}`
+        );
       }
 
-      // Grouping by Item Code, Batch, and District
       const aggregated: Record<string, {
         itemCode: string;
         itemName: string;
@@ -220,7 +223,11 @@ export default function StockAgingPage() {
         expDate: string;
       }> = {};
 
+      const validationErrors: string[] = [];
+      let rowNum = 1; // including header
+
       for (const row of parsed.data) {
+        rowNum++;
         const rawCode = row["Item Code"];
         const rawName = row["Item Name"];
         const rawStock = row["AVAILABLE STOCK"];
@@ -233,21 +240,66 @@ export default function StockAgingPage() {
         const rawMfgDate = row["MFG Date"] || row["mfg_date"] || "";
         const rawExpDate = row["EXP Date"] || row["exp_date"] || "";
 
-        if (!rawCode || !rawName) continue;
+        // Skip completely empty rows
+        if (!rawCode && !rawName && !rawStock && !rawMfg && !rawExpire) {
+          continue;
+        }
+
+        if (!rawCode) {
+          validationErrors.push(`Row ${rowNum}: Missing "Item Code" column value`);
+          continue;
+        }
+        if (!rawName) {
+          validationErrors.push(`Row ${rowNum} (Item "${rawCode}"): Missing "Item Name" column value`);
+          continue;
+        }
 
         const itemCode = rawCode.trim();
         const itemName = rawName.trim();
         const batch = rawBatch.trim();
         const district = rawDistrict.trim();
-        if (!itemCode) continue;
 
-        const stock = parseFloat(rawStock || "0");
-        const mfg = parseFloat(rawMfg || "0");
-        const expire = parseFloat(rawExpire || "0");
+        // Validate stock
+        let stock = 0;
+        if (rawStock) {
+          const parsedStock = parseFloat(rawStock);
+          if (isNaN(parsedStock)) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "AVAILABLE STOCK" ("${rawStock}"). Must be a number.`);
+          } else {
+            stock = parsedStock;
+          }
+        }
+
+        // Validate Days From Manufacture
+        let mfg = 0;
+        if (rawMfg) {
+          const parsedMfg = parseFloat(rawMfg);
+          if (isNaN(parsedMfg)) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "Days From Manufacture" ("${rawMfg}"). Must be a number.`);
+          } else {
+            mfg = parsedMfg;
+          }
+        }
+
+        // Validate Days To Expire
+        let expire = 0;
+        if (rawExpire) {
+          const parsedExpire = parseFloat(rawExpire);
+          if (isNaN(parsedExpire)) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "Days To Expire" ("${rawExpire}"). Must be a number.`);
+          } else {
+            expire = parsedExpire;
+          }
+        }
+
+        // Parse prices
         const mrpVal = parseFloat(rawMrp || "0");
         const costVal = parseFloat(rawCost || "0");
 
-        if (isNaN(stock) || isNaN(mfg) || isNaN(expire)) continue;
+        if (validationErrors.length > 50) {
+          validationErrors.push("... Too many errors detected. Processing halted.");
+          break;
+        }
 
         const key = `${itemCode}_${batch}_${district}`;
 
@@ -271,6 +323,14 @@ export default function StockAgingPage() {
         current.totalStock += stock;
         current.daysFromMfg = Math.max(current.daysFromMfg, mfg);
         current.daysToExpire = Math.min(current.daysToExpire, expire);
+      }
+
+      if (validationErrors.length > 0) {
+        throw new Error(
+          `Data Validation Error:\n` +
+          validationErrors.slice(0, 10).map(err => `- ${err}`).join("\n") +
+          (validationErrors.length > 10 ? `\n- ... and ${validationErrors.length - 10} more errors.` : "")
+        );
       }
 
       // Format output, status and sort by Days To Expire (ascending)

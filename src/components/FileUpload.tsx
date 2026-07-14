@@ -157,7 +157,7 @@ export default function FileUpload({
                 d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
               />
             </svg>
-            <span className="text-sm text-rose-300 font-medium">{error}</span>
+            <span className="text-sm text-rose-300 font-medium whitespace-pre-wrap">{error}</span>
           </div>
         </div>
       )}

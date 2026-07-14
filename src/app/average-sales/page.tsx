@@ -32,7 +32,9 @@ interface SalesReportItem {
   conversionFactor: number;
   totalQtyCld: number;
   totalQtySold: number;
-  avgQtyPerTransaction: number;
+  closingStock: number;
+  deadStock: number;
+  deadStockPercent: number;
   totalRevenue: number;
   avgRevenuePerTransaction: number;
   status: string;
@@ -49,7 +51,9 @@ const SAMPLE_SALES_DATA: SalesReportItem[] = [
     conversionFactor: 36,
     totalQtyCld: 3,
     totalQtySold: 108,
-    avgQtyPerTransaction: 36,
+    closingStock: 200,
+    deadStock: 92,
+    deadStockPercent: 46.0,
     totalRevenue: 10259.58,
     avgRevenuePerTransaction: 3419.86,
     status: "Active Sales",
@@ -61,7 +65,9 @@ const SAMPLE_SALES_DATA: SalesReportItem[] = [
     conversionFactor: 24,
     totalQtyCld: 2,
     totalQtySold: 48,
-    avgQtyPerTransaction: 24,
+    closingStock: 30,
+    deadStock: 0,
+    deadStockPercent: 0.0,
     totalRevenue: 1696.96,
     avgRevenuePerTransaction: 848.48,
     status: "Active Sales",
@@ -161,7 +167,7 @@ export default function AverageSalesPage() {
     try {
       const fileContent = await salesFile.text();
       if (!fileContent.trim()) {
-        throw new Error("CSV file is empty");
+        throw new Error("File Upload Error:\n- The selected CSV file is empty.");
       }
 
       const parsed = Papa.parse<any>(fileContent, {
@@ -170,18 +176,21 @@ export default function AverageSalesPage() {
       });
 
       if (parsed.errors.length > 0 && parsed.data.length === 0) {
-        throw new Error(`Error parsing CSV: ${parsed.errors[0].message}`);
+        throw new Error(`CSV Parsing Error:\n- ${parsed.errors[0].message} (Line ${parsed.errors[0].row})`);
       }
 
       const headers = parsed.meta.fields || [];
       const requiredColumns = ["Item Code", "Item Name", "Item Net Amount"];
-      for (const col of requiredColumns) {
-        if (!headers.includes(col)) {
-          throw new Error(`CSV missing required column: ${col}`);
-        }
+      const missingCols = requiredColumns.filter(col => !headers.includes(col));
+      
+      if (missingCols.length > 0) {
+        throw new Error(
+          `Column Validation Error:\n` +
+          `- Missing required column(s): ${missingCols.map(c => `"${c}"`).join(", ")}\n` +
+          `- Detected headers in your file: ${headers.slice(0, 8).join(", ")}${headers.length > 8 ? "..." : ""}`
+        );
       }
 
-      // Grouping and aggregating by Item Code and District/Depot
       const aggregated: Record<string, {
         itemCode: string;
         itemName: string;
@@ -194,8 +203,11 @@ export default function AverageSalesPage() {
       }> = {};
 
       const activeDistricts = new Set<string>();
+      const validationErrors: string[] = [];
+      let rowNum = 1; // including header
 
       for (const row of parsed.data) {
+        rowNum++;
         const rawCode = row["Item Code"];
         const rawName = row["Item Name"];
         const rawQtyCld = row["Qty in CLD"];
@@ -204,36 +216,71 @@ export default function AverageSalesPage() {
         const rawConversionFactor = row["Conversion Factor"];
         const rawDistrict = row["district"] || row["District"] || "N/A";
 
-        if (!rawCode || !rawName) continue;
+        // Skip completely empty rows
+        if (!rawCode && !rawName && !rawQtyCld && !rawQtyPcs && !rawRevenue) {
+          continue;
+        }
+
+        if (!rawCode) {
+          validationErrors.push(`Row ${rowNum}: Missing "Item Code" column value`);
+          continue;
+        }
+        if (!rawName) {
+          validationErrors.push(`Row ${rowNum} (Item "${rawCode}"): Missing "Item Name" column value`);
+          continue;
+        }
 
         const itemCode = rawCode.trim();
         const itemName = rawName.trim();
         const district = rawDistrict.trim();
-        if (!itemCode) continue;
 
-        activeDistricts.add(district);
+        // Validate Conversion Factor
+        let validCF = 1;
+        if (rawConversionFactor) {
+          const parsedCF = parseFloat(rawConversionFactor);
+          if (isNaN(parsedCF) || parsedCF <= 0) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "Conversion Factor" ("${rawConversionFactor}"). Must be a positive number.`);
+          } else {
+            validCF = parsedCF;
+          }
+        }
 
-        const conversionFactor = parseFloat(rawConversionFactor || "1");
-        const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
-
+        // Validate Quantity
         let qty = 0;
         let qtyCld = 0;
 
-        if (rawQtyCld && parseFloat(rawQtyCld) !== 0) {
-          qtyCld = parseFloat(rawQtyCld);
-          if (!isNaN(qtyCld)) {
-            qty = qtyCld * validCF;
+        if (rawQtyCld && rawQtyCld.trim() !== "" && parseFloat(rawQtyCld) !== 0) {
+          const parsedCld = parseFloat(rawQtyCld);
+          if (isNaN(parsedCld)) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "Qty in CLD" ("${rawQtyCld}"). Must be a number.`);
           } else {
-            qtyCld = 0;
-            qty = parseFloat(rawQtyPcs || "0");
+            qtyCld = parsedCld;
+            qty = qtyCld * validCF;
           }
         } else {
-          qty = parseFloat(rawQtyPcs || "0");
+          const parsedPcs = parseFloat(rawQtyPcs || "0");
+          if (isNaN(parsedPcs)) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "Qty in PCs" ("${rawQtyPcs}"). Must be a number.`);
+          } else {
+            qty = parsedPcs;
+          }
         }
 
-        const revenue = parseFloat(rawRevenue || "0");
+        // Validate Revenue
+        let revenue = 0;
+        if (rawRevenue) {
+          const parsedRev = parseFloat(rawRevenue);
+          if (isNaN(parsedRev)) {
+            validationErrors.push(`Row ${rowNum} (Item "${itemCode}"): Invalid "Item Net Amount" ("${rawRevenue}"). Must be a number.`);
+          } else {
+            revenue = parsedRev;
+          }
+        }
 
-        if (isNaN(qty) || isNaN(revenue)) continue;
+        if (validationErrors.length > 50) {
+          validationErrors.push("... Too many errors detected. Processing halted.");
+          break;
+        }
 
         const key = `${itemCode}_${district}`;
 
@@ -256,7 +303,17 @@ export default function AverageSalesPage() {
         aggregated[key].transactionCount += 1;
       }
 
-      // Process optional master file to find missing models
+      if (validationErrors.length > 0) {
+        throw new Error(
+          `Data Validation Error:\n` +
+          validationErrors.slice(0, 10).map(err => `- ${err}`).join("\n") +
+          (validationErrors.length > 10 ? `\n- ... and ${validationErrors.length - 10} more errors.` : "")
+        );
+      }
+
+      // Process optional master file to find missing models and populate closing stock
+      const closingStockMap: Record<string, number> = {};
+
       if (masterFile && masterFile.size > 0) {
         const masterContent = await masterFile.text();
         const parsedMaster = Papa.parse<any>(masterContent, {
@@ -264,32 +321,50 @@ export default function AverageSalesPage() {
           skipEmptyLines: true,
         });
 
+        if (parsedMaster.errors.length > 0 && parsedMaster.data.length === 0) {
+          throw new Error(`Closing Stock CSV Parsing Error:\n- ${parsedMaster.errors[0].message} (Line ${parsedMaster.errors[0].row})`);
+        }
+
         const masterHeaders = parsedMaster.meta.fields || [];
-        if (masterHeaders.includes("Item Code")) {
-          for (const row of parsedMaster.data) {
-            const rawCode = row["Item Code"];
-            const rawName = row["Item Name"];
-            const rawCF = row["Conversion Factor"];
-            const rawDistrict = row["district"] || row["District"] || (activeDistricts.size > 0 ? Array.from(activeDistricts)[0] : "Chennai");
+        if (!masterHeaders.includes("Item Code")) {
+          throw new Error(`Closing Stock CSV Validation Error:\n- Missing required column: "Item Code"`);
+        }
+        if (!masterHeaders.includes("Closing Stock")) {
+          throw new Error(
+            `Closing Stock CSV Validation Error:\n` +
+            `- Missing required column: "Closing Stock"\n` +
+            `- Detected headers: ${masterHeaders.slice(0, 8).join(", ")}${masterHeaders.length > 8 ? "..." : ""}`
+          );
+        }
 
-            if (!rawCode) continue;
+        // Aggregate closing stock by Item Code and District/Depot
+        for (const row of parsedMaster.data) {
+          const rawCode = row["Item Code"];
+          const rawStock = row["Closing Stock"];
+          const rawCF = row["Conversion Factor"];
+          const rawName = row["Item Name"];
+          const rawDistrict = row["district"] || row["District"] || (activeDistricts.size > 0 ? Array.from(activeDistricts)[0] : "Chennai");
 
-            const itemCode = rawCode.trim();
-            const itemName = (rawName || "").trim();
-            const district = rawDistrict.trim();
+          if (!rawCode) continue;
 
-            if (activeDistricts.size > 0 && !activeDistricts.has(district)) {
-              continue;
-            }
+          const itemCode = rawCode.trim();
+          const district = rawDistrict.trim();
+          const stock = parseFloat(rawStock || "0");
 
-            const key = `${itemCode}_${district}`;
+          if (isNaN(stock)) continue;
+
+          const key = `${itemCode}_${district}`;
+          closingStockMap[key] = (closingStockMap[key] || 0) + stock;
+
+          // If this item doesn't exist in sales aggregation, add it as a "No Sales" record (if district matches active sales)
+          if (activeDistricts.size === 0 || activeDistricts.has(district)) {
             if (!aggregated[key]) {
               const conversionFactor = parseFloat(rawCF || "1");
               const validCF = isNaN(conversionFactor) || conversionFactor <= 0 ? 1 : conversionFactor;
               
               aggregated[key] = {
                 itemCode,
-                itemName: itemName || `Product ${itemCode}`,
+                itemName: (rawName || "").trim() || `Product ${itemCode}`,
                 district,
                 totalQtySold: 0,
                 totalQtyCld: 0,
@@ -302,11 +377,20 @@ export default function AverageSalesPage() {
         }
       }
 
-      // Format output and calculate averages
+      // Format output and calculate averages/Dead Stock
       const result = Object.values(aggregated).map((item) => {
-        const avgQtyPerTransaction = item.transactionCount > 0
-          ? parseFloat((item.totalQtySold / item.transactionCount).toFixed(2))
+        const key = `${item.itemCode}_${item.district}`;
+        const closingStock = closingStockMap[key] || 0;
+
+        // Dead Stock = Closing Stock - Total Qty Sold
+        const deadStock = closingStock > item.totalQtySold
+          ? closingStock - item.totalQtySold
           : 0;
+
+        const deadStockPercent = closingStock > 0 && closingStock >= item.totalQtySold
+          ? parseFloat(((deadStock / closingStock) * 100).toFixed(1))
+          : -1;
+
         const avgRevenuePerTransaction = item.transactionCount > 0
           ? parseFloat((item.totalRevenue / item.transactionCount).toFixed(2))
           : 0;
@@ -320,7 +404,9 @@ export default function AverageSalesPage() {
           conversionFactor: item.conversionFactor,
           totalQtyCld: parseFloat(item.totalQtyCld.toFixed(2)),
           totalQtySold: parseFloat(item.totalQtySold.toFixed(2)),
-          avgQtyPerTransaction,
+          closingStock: parseFloat(closingStock.toFixed(2)),
+          deadStock: parseFloat(deadStock.toFixed(2)),
+          deadStockPercent,
           totalRevenue: parseFloat(item.totalRevenue.toFixed(2)),
           avgRevenuePerTransaction,
           status: hasSales ? "Active Sales" : "No Sales",
@@ -472,8 +558,10 @@ export default function AverageSalesPage() {
   const subtotals = useMemo(() => {
     const totalQtyCld = processedData.reduce((acc, item) => acc + item.totalQtyCld, 0);
     const totalQty = processedData.reduce((acc, item) => acc + item.totalQtySold, 0);
+    const totalClosing = processedData.reduce((acc, item) => acc + item.closingStock, 0);
+    const totalDead = processedData.reduce((acc, item) => acc + item.deadStock, 0);
     const totalRev = processedData.reduce((acc, item) => acc + item.totalRevenue, 0);
-    return { totalQtyCld, totalQty, totalRev };
+    return { totalQtyCld, totalQty, totalClosing, totalDead, totalRev };
   }, [processedData]);
 
   // Top 5 items for Chart
@@ -504,7 +592,9 @@ export default function AverageSalesPage() {
     { key: "conversionFactor", label: "Conversion Factor" },
     { key: "totalQtyCld", label: "Total Qty Sold (CLD)" },
     { key: "totalQtySold", label: "Total Qty Sold (PCs)" },
-    { key: "avgQtyPerTransaction", label: "Avg Qty/Transaction" },
+    { key: "closingStock", label: "Closing Stock" },
+    { key: "deadStock", label: "Dead Stock" },
+    { key: "deadStockPercent", label: "Dead Stock %" },
     { key: "totalRevenue", label: "Total Revenue" },
     { key: "avgRevenuePerTransaction", label: "Avg Revenue/Transaction" },
     { key: "status", label: "Status" },
@@ -513,14 +603,27 @@ export default function AverageSalesPage() {
   const handleExportCSV = () => {
     const dateStr = new Date().toISOString().split("T")[0];
     const uniqueDistricts = Array.from(new Set(processedData.map((d) => d.district).filter(Boolean)));
+
+    const formatExportData = (items: SalesReportItem[]) => {
+      return items.map(item => {
+        let percentStr = "-";
+        if (item.closingStock > 0 && item.closingStock >= item.totalQtySold) {
+          percentStr = `${((item.deadStock / item.closingStock) * 100).toFixed(1)}%`;
+        }
+        return {
+          ...item,
+          deadStockPercent: percentStr
+        };
+      });
+    };
     
     if (uniqueDistricts.length <= 1) {
       const districtSuffix = uniqueDistricts.length === 1 ? `-${uniqueDistricts[0]}` : "";
-      downloadCSV(processedData, `Average_Sales_Report_${dateStr}${districtSuffix}.csv`, csvHeaders);
+      downloadCSV(formatExportData(processedData), `Average_Sales_Report_${dateStr}${districtSuffix}.csv`, csvHeaders);
     } else {
       uniqueDistricts.forEach((district) => {
         const districtData = processedData.filter((d) => d.district === district);
-        downloadCSV(districtData, `Average_Sales_Report_${dateStr}-${district}.csv`, csvHeaders);
+        downloadCSV(formatExportData(districtData), `Average_Sales_Report_${dateStr}-${district}.csv`, csvHeaders);
       });
     }
   };
@@ -579,11 +682,11 @@ export default function AverageSalesPage() {
               />
             </div>
 
-            {/* Master CSV Upload */}
+            {/* Closing Stock CSV Upload */}
             <div className="bg-slate-900/20 border border-slate-800/80 rounded-3xl p-6 backdrop-blur-md shadow-2xl relative overflow-hidden group">
               <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 via-transparent to-purple-500/5 opacity-50 group-hover:opacity-100 transition-opacity duration-500" />
               <h3 className="text-sm font-bold text-slate-300 mb-3 uppercase tracking-wider">
-                2. Master / Closing Stock CSV (Optional - to find missing models)
+                2. Closing Stock CSV (Optional - to calculate Dead Stock)
               </h3>
               <FileUpload
                 onFileSelect={(f) => { setMasterFile(f); setError(null); }}
@@ -591,7 +694,7 @@ export default function AverageSalesPage() {
                 onClear={() => setMasterFile(null)}
                 selectedFile={masterFile}
                 error={null}
-                hint="Drop CLOSING.csv here"
+                hint="Drop Closing Stock CSV here"
               />
             </div>
           </div>
@@ -615,13 +718,13 @@ export default function AverageSalesPage() {
                 <div className="absolute inset-0 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" />
               </div>
               <p className="text-sm font-medium text-slate-400 animate-pulse">
-                Analyzing transactions and mapping against master stock...
+                Analyzing transactions and mapping against closing stock...
               </p>
             </div>
           )}
 
           {error && (
-            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-400 font-medium">
+            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl text-sm text-rose-400 font-medium whitespace-pre-wrap">
               {error}
             </div>
           )}
@@ -785,23 +888,15 @@ export default function AverageSalesPage() {
                   </p>
                   <div className="space-y-3 pt-2">
                     <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-400 font-medium">Avg Transaction Revenue:</span>
+                      <span className="text-slate-400 font-medium">Total Closing Stock:</span>
                       <span className="text-white font-bold">
-                        ₹
-                        {(
-                          processedData.reduce((acc, item) => acc + item.avgRevenuePerTransaction, 0) /
-                          Math.max(1, processedData.length)
-                        ).toFixed(2)}
+                        {processedData.reduce((acc, item) => acc + item.closingStock, 0).toLocaleString()} pcs
                       </span>
                     </div>
                     <div className="flex justify-between items-center text-xs">
-                      <span className="text-slate-400 font-medium">Avg Quantity per Txn:</span>
+                      <span className="text-slate-400 font-medium">Total Dead Stock:</span>
                       <span className="text-white font-bold">
-                        {(
-                          processedData.reduce((acc, item) => acc + item.avgQtyPerTransaction, 0) /
-                          Math.max(1, processedData.length)
-                        ).toFixed(1)}{" "}
-                        pcs
+                        {processedData.reduce((acc, item) => acc + item.deadStock, 0).toLocaleString()} pcs
                       </span>
                     </div>
                   </div>
@@ -931,10 +1026,22 @@ export default function AverageSalesPage() {
                       Total Qty Sold (PCs) {renderSortIndicator("totalQtySold")}
                     </th>
                     <th
-                      onClick={() => handleSort("avgQtyPerTransaction")}
+                      onClick={() => handleSort("closingStock")}
                       className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
                     >
-                      Avg Qty/Txn {renderSortIndicator("avgQtyPerTransaction")}
+                      Closing Stock (PCS) {renderSortIndicator("closingStock")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("deadStock")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Dead Stock (PCS) {renderSortIndicator("deadStock")}
+                    </th>
+                    <th
+                      onClick={() => handleSort("deadStockPercent")}
+                      className="p-4 cursor-pointer text-right hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Dead Stock % {renderSortIndicator("deadStockPercent")}
                     </th>
                     <th
                       onClick={() => handleSort("totalRevenue")}
@@ -948,8 +1055,11 @@ export default function AverageSalesPage() {
                     >
                       Avg Revenue/Txn {renderSortIndicator("avgRevenuePerTransaction")}
                     </th>
-                    <th className="p-4 text-center">
-                      Status
+                    <th
+                      onClick={() => handleSort("status")}
+                      className="p-4 cursor-pointer text-center hover:bg-slate-800/40 hover:text-white transition"
+                    >
+                      Status {renderSortIndicator("status")}
                     </th>
                   </tr>
                 </thead>
@@ -978,9 +1088,33 @@ export default function AverageSalesPage() {
                         <td className="p-4 text-right font-semibold">
                           {item.totalQtySold.toLocaleString()}
                         </td>
-                        <td className="p-4 text-right text-slate-400">
-                          {item.avgQtyPerTransaction}
+                        <td className="p-4 text-right font-mono text-slate-300">
+                          {item.closingStock.toLocaleString()}
                         </td>
+                        <td className="p-4 text-right font-mono text-slate-350">
+                          {item.deadStock.toLocaleString()}
+                        </td>
+                        {(() => {
+                          let percentStr = "-";
+                          let colorClass = "text-rose-500 font-bold";
+                          
+                          if (item.closingStock > 0 && item.closingStock >= item.totalQtySold) {
+                            const percent = (item.deadStock / item.closingStock) * 100;
+                            percentStr = `${percent.toFixed(1)}%`;
+                            if (percent < 20) {
+                              colorClass = "text-emerald-400 font-semibold";
+                            } else if (percent <= 50) {
+                              colorClass = "text-amber-500 font-semibold";
+                            } else {
+                              colorClass = "text-rose-500 font-bold";
+                            }
+                          }
+                          return (
+                            <td className={`p-4 text-right font-mono ${colorClass}`}>
+                              {percentStr}
+                            </td>
+                          );
+                        })()}
                         <td className="p-4 text-right font-bold text-indigo-400">
                           ₹{item.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </td>
@@ -993,7 +1127,7 @@ export default function AverageSalesPage() {
                               No Sales
                             </span>
                           ) : (
-                            <span className="inline-flex px-2 py-0.5 rounded-md text-xs font-bold bg-emerald-500/10 text-emerald-450 text-emerald-450 text-emerald-450 border border-emerald-500/20 text-emerald-400">
+                            <span className="inline-flex px-2 py-0.5 rounded-md text-xs font-bold bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
                               Active
                             </span>
                           )}
@@ -1002,7 +1136,7 @@ export default function AverageSalesPage() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={10} className="p-8 text-center text-slate-500 font-medium">
+                      <td colSpan={12} className="p-8 text-center text-slate-500 font-medium">
                         No matching records found.
                       </td>
                     </tr>
@@ -1014,8 +1148,14 @@ export default function AverageSalesPage() {
                     <tr className="text-slate-200 font-bold text-sm">
                       <td className="p-4" colSpan={4}>Subtotal</td>
                       <td className="p-4 text-right font-mono text-slate-400">{subtotals.totalQtyCld.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                      <td className="p-4 text-right">{subtotals.totalQty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                      <td className="p-4 text-right text-slate-400">—</td>
+                      <td className="p-4 text-right font-mono text-slate-200">{subtotals.totalQty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                      <td className="p-4 text-right font-mono text-slate-300">{subtotals.totalClosing.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                      <td className="p-4 text-right font-mono text-slate-350">{subtotals.totalDead.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                      <td className="p-4 text-right font-mono text-slate-400">
+                        {subtotals.totalClosing > 0 && subtotals.totalClosing >= subtotals.totalQty
+                          ? `${((subtotals.totalDead / subtotals.totalClosing) * 100).toFixed(1)}%`
+                          : "—"}
+                      </td>
                       <td className="p-4 text-right text-indigo-400">₹{subtotals.totalRev.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                       <td className="p-4 text-right text-slate-400">—</td>
                       <td className="p-4 text-center text-slate-400">—</td>
