@@ -7,7 +7,7 @@ import { FileText, Database } from "lucide-react";
 
 interface RecentReport {
   id: string;
-  type: "Sales" | "Stock";
+  type: "Sales" | "Stock" | "BillingWise";
   filename: string;
   timestamp: string;
   recordCount: number;
@@ -44,6 +44,12 @@ export default function Sidebar() {
       router.push("/average-sales");
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent("kts-report-loaded", { detail: { type: "Sales" } }));
+      }, 100);
+    } else if (report.type === "BillingWise") {
+      sessionStorage.setItem("kts_active_billing_report", JSON.stringify(report));
+      router.push("/billing-wise-sales");
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("kts-report-loaded", { detail: { type: "BillingWise" } }));
       }, 100);
     } else {
       sessionStorage.setItem("kts_active_stock_report", JSON.stringify(report));
@@ -95,6 +101,26 @@ export default function Sidebar() {
         </svg>
       ),
     },
+    {
+      name: "Billing Wise Item Sales",
+      href: "/billing-wise-sales",
+      icon: (active: boolean) => (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          strokeWidth={1.5}
+          stroke="currentColor"
+          className={`h-5 w-5 ${active ? "text-indigo-400" : "text-gray-400 group-hover:text-gray-300"}`}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2Z"
+          />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -124,39 +150,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Recent Reports Section */}
-      <div className="flex-1 flex flex-col justify-end px-3 pb-4 overflow-hidden">
-        {recentReports.length > 0 && (
-          <div className="border-t border-slate-800/80 pt-4 space-y-2">
-            <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-1">
-              Recent Reports
-            </h4>
-            <div className="space-y-1 max-h-[180px] overflow-y-auto pr-1">
-              {recentReports.map((report) => (
-                <button
-                  key={report.id}
-                  onClick={() => handleReloadReport(report)}
-                  className="w-full text-left flex items-start gap-2 p-2 rounded-lg hover:bg-slate-800 transition text-[11px] group"
-                >
-                  {report.type === "Sales" ? (
-                    <Database className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
-                  ) : (
-                    <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <p className="font-semibold text-slate-300 truncate group-hover:text-white">
-                      {report.type} - {report.timestamp}
-                    </p>
-                    <p className="text-[9px] text-slate-500 truncate">
-                      {report.filename}
-                    </p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      <div className="flex-1" />
 
       <div className="p-3 border-t border-slate-800 bg-slate-950/20 text-[10px] text-slate-500 text-center">
         v1.0.0
